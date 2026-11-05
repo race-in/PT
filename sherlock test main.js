@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.8
+// @version      1.5.9
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -237,52 +237,6 @@
   // A custom tracker is included only when both uploaded and downloaded are available.
   // Sum native tracker buffer/ratio rows when the dashboard summary is internally inconsistent.
   // Buffer = uploaded - downloaded; ratio = uploaded / downloaded.
-  function calculateNativeTrackerTotals(rows) {
-    if (!Array.isArray(rows) || !rows.length) return null;
-    let uploaded = 0;
-    let downloaded = 0;
-    let buffer = 0;
-
-    for (const row of rows) {
-      if (!row || !Number.isFinite(Number(row.buffer)) || !row.ratio) return null;
-      const currentBuffer = Number(row.buffer);
-      const ratio = row.ratio;
-      let currentUploaded;
-      let currentDownloaded;
-
-      if (ratio.infinite) {
-        currentUploaded = currentBuffer;
-        currentDownloaded = 0;
-      } else {
-        const value = Number(ratio.value);
-        if (!Number.isFinite(value) || value < 0) return null;
-        if (value === 0) {
-          currentUploaded = 0;
-          currentDownloaded = -currentBuffer;
-        } else if (Math.abs(value - 1) < 1e-9) {
-          // With ratio 1.00 and zero buffer, the two totals cannot be recovered from the card.
-          if (Math.abs(currentBuffer) < 1) return null;
-          return null;
-        } else {
-          currentDownloaded = currentBuffer / (value - 1);
-          currentUploaded = currentDownloaded * value;
-        }
-      }
-
-      if (!Number.isFinite(currentUploaded) || !Number.isFinite(currentDownloaded) ||
-          currentUploaded < 0 || currentDownloaded < 0) return null;
-
-      uploaded += currentUploaded;
-      downloaded += currentDownloaded;
-      buffer += currentBuffer;
-    }
-
-    return { uploaded, downloaded, buffer };
-  }
-
-  // Match Sherlock's Snapshot.buffer() calculation for browser-local custom trackers.
-  // "required_ratio" uses floor(uploaded / required_ratio) - downloaded; a missing
-  // or non-positive required ratio falls back to the standard 1.0 basis.
   function customTrackerBuffer(stats, bufferBasis) {
     // An explicit tracker Buffer is authoritative; only infer when the tracker does not supply one.
     const suppliedBuffer = stats && stats.buffer;
@@ -317,13 +271,9 @@
     if (!Number.isFinite(downloaded)) downloaded = null;
     let buffer = baseBuffer;
 
-    // With the normal 1.0 basis, native downloaded = uploaded - buffer.
-    // In required-ratio mode the native buffer is adjusted per tracker, so that
-    // subtraction cannot recover raw downloaded bytes from the aggregate totals.
-    if (downloaded === null && bufferBasis !== 'required_ratio') {
-      downloaded = baseUploaded - baseBuffer;
-      if (!Number.isFinite(downloaded) || downloaded < 0) downloaded = null;
-    }
+    // Do not derive downloaded from aggregate Uploaded and Buffer. They may use
+    // different time windows or a tracker-specific buffer basis. Only an explicit,
+    // independently verified downloaded total may populate this value.
 
     for (const tracker of customTrackers || []) {
       const stats = tracker && tracker.stats || {};
@@ -733,7 +683,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -742,7 +692,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.8';
+  const VERSION = '1.5.9';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2495,32 +2445,6 @@
     return parsed;
   }
 
-  function readNativeTrackerRows(main) {
-    const cards = Array.from(main.querySelectorAll('a.card[href^="/trackers/"]'));
-    if (!cards.length) return null;
-
-    const rows = [];
-    for (const card of cards) {
-      const metric = (name) => {
-        const dt = Array.from(card.querySelectorAll('dt')).find((node) =>
-          (node.textContent || '').trim().toLowerCase() === name
-        );
-        if (!dt) return null;
-        const dd = dt.parentElement && dt.parentElement.querySelector('dd');
-        return dd && dd.querySelector('.num');
-      };
-
-      const bufferNode = metric('buffer');
-      const ratioNode = metric('ratio');
-      const buffer = readMetricNodeBytes(bufferNode);
-      const ratio = ratioNode ? parseRatio(ratioNode.textContent) : null;
-      if (buffer === null || !ratio) return null;
-      rows.push({ buffer, ratio });
-    }
-
-    return calculateNativeTrackerTotals(rows);
-  }
-
   function writeDashboardMetric(card, bytes) {
     const valueNode = card && card.querySelector('.num');
     if (!valueNode || !Number.isFinite(bytes)) return;
@@ -2540,69 +2464,40 @@
         return (label && label.textContent || '').trim().toLowerCase();
       });
       return labels.some((label) => bufferLabelPattern.test(label)) &&
-        labels.includes('total uploaded') &&
-        (labels.includes('buffer, last 24 hours') || labels.includes('total downloaded'));
+        labels.includes('total uploaded');
     });
-    if (!summarySection) return;
+    if (!summarySection) return null;
 
     const cards = Array.from(summarySection.children).filter((child) => child.classList.contains('card'));
     const labelOf = (card) => {
       const label = card && card.querySelector('.eyebrow');
       return (label && label.textContent || '').trim().toLowerCase();
     };
-    const findCard = (labelText) => cards.find((card) => labelOf(card) === labelText);
 
     const bufferCard = cards.find((card) => bufferLabelPattern.test(labelOf(card)));
-    const uploadedCard = findCard('total uploaded');
-    const downloadedCard = findCard('total downloaded') || findCard('buffer, last 24 hours');
-    if (!bufferCard || !uploadedCard || !downloadedCard) return;
+    const uploadedCard = cards.find((card) => labelOf(card) === 'total uploaded');
+    if (!bufferCard || !uploadedCard) return null;
 
     const bufferBasis = /at required ratio$/.test(labelOf(bufferCard)) ? 'required_ratio' : 'one_to_one';
     const nativeBuffer = readNativeMetricBytes(bufferCard);
     const nativeUploaded = readNativeMetricBytes(uploadedCard);
-    if (nativeBuffer === null || nativeUploaded === null) return;
+    if (nativeBuffer === null || nativeUploaded === null) return null;
 
-    // Raw native downloaded totals can be derived from the summary only with the 1.0 basis.
-    // In required-ratio mode, the native Buffer is adjusted per tracker; don't infer downloads
-    // from Uploaded - Buffer or from the displayed (rounded) share ratios.
-    let nativeDownloaded = bufferBasis === 'required_ratio' ? null : nativeUploaded - nativeBuffer;
-    if (nativeDownloaded !== null && nativeDownloaded < 0) {
-      const recovered = readNativeTrackerRows(main);
-      nativeDownloaded = recovered ? recovered.downloaded : null;
-    }
-
+    // Preserve Sherlock's own "Buffer, last 24 hours" card exactly as delivered.
+    // Rounded ratios on tracker cards are not a valid source for total downloads.
     const totals = calculateDashboardTotals(
       nativeBuffer,
       nativeUploaded,
       customTrackers,
-      nativeDownloaded,
+      null,
       bufferBasis
     );
-    if (!totals) return;
+    if (!totals) return null;
 
-    // These two totals stay anchored to Sherlock's own exact native snapshot sums.
+    // The custom tracker integration only extends Buffer and Uploaded.
+    // No synthetic Total Downloaded value is written to Sherlock's native summary.
     writeDashboardMetric(bufferCard, totals.buffer);
     writeDashboardMetric(uploadedCard, totals.uploaded);
-
-    const downloadedLabel = downloadedCard.querySelector('.eyebrow');
-    if (downloadedLabel) downloadedLabel.textContent = 'Total Downloaded';
-    if (totals.downloaded === null) {
-      const value = downloadedCard.querySelector('.num');
-      if (value) {
-        value.textContent = '—';
-        value.removeAttribute('title');
-      }
-    } else {
-      writeDashboardMetric(downloadedCard, totals.downloaded);
-    }
-
-    // Match Total Uploaded's exact text sizing and colour.
-    // The old 24-hour value had "text-muted", which should not apply to Total Downloaded.
-    const downloadedValue = downloadedCard.querySelector('.num');
-    const totalValueStyle = uploadedCard.querySelector('.num');
-    if (downloadedValue && totalValueStyle) {
-      downloadedValue.className = totalValueStyle.className;
-    }
     return bufferBasis;
   }
 
