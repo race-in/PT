@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.5
+// @version      1.3.6
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -171,10 +171,42 @@
     return (caps.length >= 2 ? caps : name.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'TRK').slice(0, 8);
   }
 
+  // Combine Sherlock's native dashboard totals with browser-local custom tracker totals.
+  // A custom tracker is included only when both uploaded and downloaded are available.
+  function calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers) {
+    const baseBuffer = Number(nativeBuffer);
+    const baseUploaded = Number(nativeUploaded);
+    if (!Number.isFinite(baseBuffer) || !Number.isFinite(baseUploaded)) return null;
+
+    let uploaded = baseUploaded;
+    let downloaded = baseUploaded - baseBuffer;
+
+    for (const tracker of customTrackers || []) {
+      const stats = tracker && tracker.stats || {};
+      const rawUploaded = stats.uploaded;
+      const rawDownloaded = stats.downloaded;
+      if (rawUploaded === null || rawUploaded === undefined || rawUploaded === '' ||
+          rawDownloaded === null || rawDownloaded === undefined || rawDownloaded === '') continue;
+
+      const trackerUploaded = Number(rawUploaded);
+      const trackerDownloaded = Number(rawDownloaded);
+      if (!Number.isFinite(trackerUploaded) || !Number.isFinite(trackerDownloaded)) continue;
+
+      uploaded += trackerUploaded;
+      downloaded += trackerDownloaded;
+    }
+
+    return {
+      uploaded,
+      downloaded,
+      buffer: uploaded - downloaded,
+    };
+  }
+
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, calculateDashboardTotals };
     }
     return;
   }
@@ -183,7 +215,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.5';
+  const VERSION = '1.3.6';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -822,6 +854,85 @@
     return (i ? n.toFixed(n >= 100 ? 1 : 2).replace(/\.?0+$/, '') : String(Math.round(n))) + ' ' + units[i];
   }
 
+  function parseMetricBytes(value) {
+    const text = String(value || '').trim();
+    if (!text) return null;
+    const negative = /^[−-]/.test(text);
+    const unsigned = text.replace(/^[−-]\s*/, '');
+    const parsed = parseBytes(unsigned, false);
+    return parsed === null ? null : (negative ? -parsed : parsed);
+  }
+
+  function readNativeMetricBytes(card) {
+    const valueNode = card && card.querySelector('.num');
+    if (!valueNode) return null;
+
+    const title = valueNode.getAttribute('title') || '';
+    const savedBase = valueNode.dataset.sherlockNativeBytes;
+    const lastOutputTitle = valueNode.dataset.sherlockLastOutputTitle;
+
+    // Keep our original native total on repeated Turbo renders. If Sherlock updates
+    // the title itself, detect the changed server value and refresh the stored base.
+    if (savedBase !== undefined && (title === lastOutputTitle || !title)) {
+      const saved = Number(savedBase);
+      return Number.isFinite(saved) ? saved : null;
+    }
+
+    const parsed = parseMetricBytes(title) ?? parseMetricBytes(valueNode.textContent);
+    if (parsed === null) return null;
+    valueNode.dataset.sherlockNativeBytes = String(parsed);
+    return parsed;
+  }
+
+  function writeDashboardMetric(card, bytes) {
+    const valueNode = card && card.querySelector('.num');
+    if (!valueNode || !Number.isFinite(bytes)) return;
+    const title = Math.round(bytes).toLocaleString() + ' bytes';
+    valueNode.textContent = localBytes(bytes);
+    valueNode.setAttribute('title', title);
+    valueNode.dataset.sherlockLastOutputTitle = title;
+  }
+
+  function updateDashboardTotals(customTrackers) {
+    const main = document.querySelector('main') || document.querySelector('#main') || document.body;
+    const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
+      const cards = Array.from(section.children).filter((child) => child.classList.contains('card'));
+      const labels = cards.map((card) => {
+        const label = card.querySelector('.eyebrow');
+        return (label && label.textContent || '').trim().toLowerCase();
+      });
+      return labels.includes('total buffer') &&
+        labels.includes('total uploaded') &&
+        labels.includes('buffer, last 24 hours');
+    });
+    if (!summarySection) return;
+
+    const cards = Array.from(summarySection.children).filter((child) => child.classList.contains('card'));
+    const findCard = (labelText) => cards.find((card) => {
+      const label = card.querySelector('.eyebrow');
+      return (label && label.textContent || '').trim().toLowerCase() === labelText;
+    });
+
+    const bufferCard = findCard('total buffer');
+    const uploadedCard = findCard('total uploaded');
+    const downloadedCard = findCard('buffer, last 24 hours');
+    if (!bufferCard || !uploadedCard || !downloadedCard) return;
+
+    const nativeBuffer = readNativeMetricBytes(bufferCard);
+    const nativeUploaded = readNativeMetricBytes(uploadedCard);
+    if (nativeBuffer === null || nativeUploaded === null) return;
+
+    const totals = calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers);
+    if (!totals) return;
+
+    writeDashboardMetric(bufferCard, totals.buffer);
+    writeDashboardMetric(uploadedCard, totals.uploaded);
+
+    const downloadedLabel = downloadedCard.querySelector('.eyebrow');
+    if (downloadedLabel) downloadedLabel.textContent = 'Total Downloaded';
+    writeDashboardMetric(downloadedCard, totals.downloaded);
+  }
+
   function localRatio(stats) {
     if (stats.ratio !== null && stats.ratio !== undefined && Number.isFinite(Number(stats.ratio))) return Number(stats.ratio).toFixed(2);
     const up = Number(stats.uploaded), down = Number(stats.downloaded);
@@ -875,6 +986,9 @@
     const trackers = Object.values(store.trackers)
       .filter((tracker) => tracker && tracker.host)
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    // Update the three existing summary cards without changing their markup or styling.
+    updateDashboardTotals(trackers);
     if (!trackers.length) return;
 
     // 1) Add custom trackers to BOTH responsive sidebar navigation lists.
