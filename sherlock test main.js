@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.7
+// @version      1.4.8
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -500,7 +500,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.7';
+  const VERSION = '1.4.8';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2008,7 +2008,16 @@
   }
 
   function looksLikeTracker() {
-    if (isCinemageddonDocument(document)) return !document.querySelector('input[type="password"]');
+    if (isCinemageddonDocument(document)) {
+      if (document.querySelector('input[type="password"]')) return false;
+      // Reset a stale failed auto-detection cooldown once when this parser version is installed.
+      const versionKey = 'sherlock.cinemageddon.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
     if (trackerApiType({ host: HOST, origin: location.origin })) {
       return !document.querySelector('input[type="password"]');
     }
@@ -2097,6 +2106,8 @@
         actions: store.url ? [{ label: 'Open Sherlock dashboard', href: store.url + '/dashboard' }] : [],
       });
     } catch (e) {
+      // Failed reads can retry after five minutes instead of locking out auto-detection for 30 minutes.
+      GM_setValue(cooldownKey, Date.now() - 25 * 60000);
       const message = e && e.message ? e.message : 'The tracker stats could not be read.';
       toast('Automatic detection could not add this tracker: ' + message, {
         kind: 'err', title: 'Sherlock auto-detection',
