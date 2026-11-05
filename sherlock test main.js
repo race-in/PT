@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.6
+// @version      1.3.7
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -173,13 +173,62 @@
 
   // Combine Sherlock's native dashboard totals with browser-local custom tracker totals.
   // A custom tracker is included only when both uploaded and downloaded are available.
-  function calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers) {
+  // Sum native tracker buffer/ratio rows when the dashboard summary is internally inconsistent.
+  // Buffer = uploaded - downloaded; ratio = uploaded / downloaded.
+  function calculateNativeTrackerTotals(rows) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    let uploaded = 0;
+    let downloaded = 0;
+    let buffer = 0;
+
+    for (const row of rows) {
+      if (!row || !Number.isFinite(Number(row.buffer)) || !row.ratio) return null;
+      const currentBuffer = Number(row.buffer);
+      const ratio = row.ratio;
+      let currentUploaded;
+      let currentDownloaded;
+
+      if (ratio.infinite) {
+        currentUploaded = currentBuffer;
+        currentDownloaded = 0;
+      } else {
+        const value = Number(ratio.value);
+        if (!Number.isFinite(value) || value < 0) return null;
+        if (value === 0) {
+          currentUploaded = 0;
+          currentDownloaded = -currentBuffer;
+        } else if (Math.abs(value - 1) < 1e-9) {
+          // With ratio 1.00 and zero buffer, the two totals cannot be recovered from the card.
+          if (Math.abs(currentBuffer) < 1) return null;
+          return null;
+        } else {
+          currentDownloaded = currentBuffer / (value - 1);
+          currentUploaded = currentDownloaded * value;
+        }
+      }
+
+      if (!Number.isFinite(currentUploaded) || !Number.isFinite(currentDownloaded) ||
+          currentUploaded < 0 || currentDownloaded < 0) return null;
+
+      uploaded += currentUploaded;
+      downloaded += currentDownloaded;
+      buffer += currentBuffer;
+    }
+
+    return { uploaded, downloaded, buffer };
+  }
+
+  // Combine native dashboard totals with browser-local custom tracker totals.
+  function calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers, nativeDownloadedOverride) {
     const baseBuffer = Number(nativeBuffer);
     const baseUploaded = Number(nativeUploaded);
     if (!Number.isFinite(baseBuffer) || !Number.isFinite(baseUploaded)) return null;
 
     let uploaded = baseUploaded;
-    let downloaded = baseUploaded - baseBuffer;
+    let downloaded = Number.isFinite(Number(nativeDownloadedOverride))
+      ? Number(nativeDownloadedOverride)
+      : baseUploaded - baseBuffer;
+    let buffer = baseBuffer;
 
     for (const tracker of customTrackers || []) {
       const stats = tracker && tracker.stats || {};
@@ -190,23 +239,25 @@
 
       const trackerUploaded = Number(rawUploaded);
       const trackerDownloaded = Number(rawDownloaded);
-      if (!Number.isFinite(trackerUploaded) || !Number.isFinite(trackerDownloaded)) continue;
+      if (!Number.isFinite(trackerUploaded) || !Number.isFinite(trackerDownloaded) ||
+          trackerUploaded < 0 || trackerDownloaded < 0) continue;
 
       uploaded += trackerUploaded;
       downloaded += trackerDownloaded;
+      buffer += trackerUploaded - trackerDownloaded;
     }
 
     return {
       uploaded,
       downloaded,
-      buffer: uploaded - downloaded,
+      buffer,
     };
   }
 
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, calculateDashboardTotals };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, calculateDashboardTotals, calculateNativeTrackerTotals };
     }
     return;
   }
@@ -215,7 +266,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.6';
+  const VERSION = '1.3.7';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -863,6 +914,12 @@
     return parsed === null ? null : (negative ? -parsed : parsed);
   }
 
+  function readMetricNodeBytes(valueNode) {
+    if (!valueNode) return null;
+    const title = valueNode.getAttribute('title') || '';
+    return parseMetricBytes(title) ?? parseMetricBytes(valueNode.textContent);
+  }
+
   function readNativeMetricBytes(card) {
     const valueNode = card && card.querySelector('.num');
     if (!valueNode) return null;
@@ -884,6 +941,32 @@
     return parsed;
   }
 
+  function readNativeTrackerRows(main) {
+    const cards = Array.from(main.querySelectorAll('a.card[href^="/trackers/"]'));
+    if (!cards.length) return null;
+
+    const rows = [];
+    for (const card of cards) {
+      const metric = (name) => {
+        const dt = Array.from(card.querySelectorAll('dt')).find((node) =>
+          (node.textContent || '').trim().toLowerCase() === name
+        );
+        if (!dt) return null;
+        const dd = dt.parentElement && dt.parentElement.querySelector('dd');
+        return dd && dd.querySelector('.num');
+      };
+
+      const bufferNode = metric('buffer');
+      const ratioNode = metric('ratio');
+      const buffer = readMetricNodeBytes(bufferNode);
+      const ratio = ratioNode ? parseRatio(ratioNode.textContent) : null;
+      if (buffer === null || !ratio) return null;
+      rows.push({ buffer, ratio });
+    }
+
+    return calculateNativeTrackerTotals(rows);
+  }
+
   function writeDashboardMetric(card, bytes) {
     const valueNode = card && card.querySelector('.num');
     if (!valueNode || !Number.isFinite(bytes)) return;
@@ -894,6 +977,56 @@
   }
 
   function updateDashboardTotals(customTrackers) {
+    const main = document.querySelector('main') || document.querySelector('#main') || document.body;
+    const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
+      const cards = Array.from(section.children).filter((child) => child.classList.contains('card'));
+      const labels = cards.map((card) => {
+        const label = card.querySelector('.eyebrow');
+        return (label && label.textContent || '').trim().toLowerCase();
+      });
+      return labels.includes('total buffer') &&
+        labels.includes('total uploaded') &&
+        (labels.includes('buffer, last 24 hours') || labels.includes('total downloaded'));
+    });
+    if (!summarySection) return;
+
+    const cards = Array.from(summarySection.children).filter((child) => child.classList.contains('card'));
+    const findCard = (labelText) => cards.find((card) => {
+      const label = card.querySelector('.eyebrow');
+      return (label && label.textContent || '').trim().toLowerCase() === labelText;
+    });
+
+    const bufferCard = findCard('total buffer');
+    const uploadedCard = findCard('total uploaded');
+    const downloadedCard = findCard('total downloaded') || findCard('buffer, last 24 hours');
+    if (!bufferCard || !uploadedCard || !downloadedCard) return;
+
+    let nativeBuffer = readNativeMetricBytes(bufferCard);
+    let nativeUploaded = readNativeMetricBytes(uploadedCard);
+    if (nativeBuffer === null || nativeUploaded === null) return;
+
+    let nativeDownloaded = nativeUploaded - nativeBuffer;
+    // If native summary values are inconsistent (e.g. they imply negative downloads),
+    // reconstruct the native totals from each built-in tracker card's Buffer and Ratio.
+    if (nativeDownloaded < 0) {
+      const recovered = readNativeTrackerRows(main);
+      if (!recovered) return;
+      nativeBuffer = recovered.buffer;
+      nativeUploaded = recovered.uploaded;
+      nativeDownloaded = recovered.downloaded;
+    }
+
+    const totals = calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers, nativeDownloaded);
+    if (!totals) return;
+
+    writeDashboardMetric(bufferCard, totals.buffer);
+    writeDashboardMetric(uploadedCard, totals.uploaded);
+
+    const downloadedLabel = downloadedCard.querySelector('.eyebrow');
+    if (downloadedLabel) downloadedLabel.textContent = 'Total Downloaded';
+    writeDashboardMetric(downloadedCard, totals.downloaded);
+  }
+otals(customTrackers) {
     const main = document.querySelector('main') || document.querySelector('#main') || document.body;
     const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
       const cards = Array.from(section.children).filter((child) => child.classList.contains('card'));
