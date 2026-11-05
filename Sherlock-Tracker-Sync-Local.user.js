@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Sherlock Tracker Sync 4
+// @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.0
+// @version      1.3.1
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -183,7 +183,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.3.1';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -218,16 +218,47 @@
   async function fetchText(url, accept) {
     const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: accept || '*/*' }, redirect: 'follow' });
     if (!res.ok) throw new ReadError('The tracker answered ' + res.status + ' for ' + new URL(url, location.href).pathname + '.');
-          const { text } = await fetchText('/ajax.php?action=user&id=' + encodeURIComponent(r.id), 'application/json');
-      const u = JSON.parse(text).response || {};
-      const c = u.community || {};
-      if (stats.seeding == null) stats.seeding = toNumber(c.seeding);
-      if (stats.leeching == null) stats.leeching = toNumber(c.leeching);
-      if (stats.snatched == null) stats.snatched = toNumber(c.snatched);
-      stats.uploads = toNumber(c.uploaded); stats.forum_posts = toNumber(c.posts); stats.torrent_comments = toNumber(c.torrentComments);
+    return { text: await res.text(), url: res.url, redirected: res.redirected };
+  }
+
+  async function readGazelle() {
+    let index;
+    try {
+      const result = await fetchText('/ajax.php?action=index', 'application/json');
+      index = JSON.parse(result.text);
+    } catch (e) {
+      throw new ReadError('Not a Gazelle tracker, or its index endpoint is unavailable.');
+    }
+    const response = index && index.status === 'success' && index.response;
+    if (!response || !response.userstats || response.id == null) throw new ReadError('Not a Gazelle tracker, or you are signed out.');
+    const userStats = response.userstats;
+    const stats = {
+      uploaded: toNumber(userStats.uploaded), downloaded: toNumber(userStats.downloaded),
+      ratio: toNumber(userStats.ratio), required_ratio: toNumber(userStats.requiredratio),
+      bonus_points: toNumber(userStats.bonusPoints), user_class: userStats.class || null,
+    };
+    try {
+      const result = await fetchText('/ajax.php?action=community_stats&userid=' + encodeURIComponent(response.id), 'application/json');
+      const community = JSON.parse(result.text).response || {};
+      stats.seeding = toNumber(community.seeding);
+      stats.leeching = toNumber(community.leeching);
+      stats.snatched = toNumber(community.snatched);
     } catch (e) { /* optional */ }
-    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) throw new ReadError('The tracker did not report uploaded and downloaded.');
-    return { kind: 'gazelle', userId: String(r.id), username: String(r.username || ''), profileUrl: null, stats };
+    try {
+      const result = await fetchText('/ajax.php?action=user&id=' + encodeURIComponent(response.id), 'application/json');
+      const user = JSON.parse(result.text).response || {};
+      const community = user.community || {};
+      if (stats.seeding == null) stats.seeding = toNumber(community.seeding);
+      if (stats.leeching == null) stats.leeching = toNumber(community.leeching);
+      if (stats.snatched == null) stats.snatched = toNumber(community.snatched);
+      stats.uploads = toNumber(community.uploaded);
+      stats.forum_posts = toNumber(community.posts);
+      stats.torrent_comments = toNumber(community.torrentComments);
+    } catch (e) { /* optional */ }
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('The tracker did not report uploaded and downloaded.');
+    }
+    return { kind: 'gazelle', userId: String(response.id), username: String(response.username || ''), profileUrl: null, stats };
   }
 
   function toNumber(v) {
@@ -719,7 +750,7 @@
       ? Number(nextStats.uploaded) - Number(nextStats.downloaded) : null;
     t.createdAt = Number(t.createdAt) || now;
     t.history = Array.isArray(t.history) ? t.history : [];
-        // Keep real observations only. The dashboard uses these for the 24-hour delta and mini chart.
+    // Keep real observations only. The dashboard uses these for the 24-hour delta and mini chart.
     if (nextBuffer !== null) {
       const last = t.history[t.history.length - 1];
       if (!last || now - Number(last.at || 0) >= 5 * 60 * 1000) {
