@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.4
+// @version      1.4.5
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -354,6 +354,29 @@
   }
 
   // IPTorrents displays decimal GB/TB units in its account stats bar.
+  function mapIptProfileDetails(data) {
+    data = data || {};
+    const out = {};
+    const uploaded = parseBytes(data.uploadedBytes, true);
+    const downloaded = parseBytes(data.downloadedBytes, true);
+    if (uploaded !== null) out.uploaded = uploaded;
+    if (downloaded !== null) out.downloaded = downloaded;
+    if (Number.isFinite(out.uploaded) && Number.isFinite(out.downloaded)) {
+      out.ratio = out.downloaded > 0
+        ? out.uploaded / out.downloaded
+        : (out.uploaded > 0 ? Infinity : null);
+    }
+
+    const userClass = String(data.userClass || '').replace(/\s+/g, ' ').trim();
+    if (userClass) out.user_class = userClass.slice(0, 50);
+
+    const joined = String(data.joinedAt || '').match(/^\d{4}-\d{2}-\d{2}/);
+    const lastSeen = String(data.lastSeenAt || '').match(/^\d{4}-\d{2}-\d{2}/);
+    if (joined) out.joined_at = joined[0];
+    if (lastSeen) out.last_access = lastSeen[0];
+    return out;
+  }
+
   function mapIptStatValues(items) {
     const out = {};
     for (const item of items || []) {
@@ -410,7 +433,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, isIptorrentsHost, normalizeIptorrentsTrackerStore };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore };
     }
     return;
   }
@@ -419,7 +442,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.4';
+  const VERSION = '1.4.5';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -833,18 +856,31 @@
     }
 
     if (isOwnProfile) {
-      const badge = (doc.querySelector('span.up-class-badge')?.textContent || '').replace(/\s+/g, ' ').trim();
-      if (badge) stats.user_class = badge;
-      else {
-        const vip = doc.querySelector('.hdr-vip');
-        if (vip && /vip/i.test(vip.getAttribute('title') || '')) stats.user_class = 'VIP';
-      }
+      const profileTimes = Array.from(doc.querySelectorAll('.upf-meta time[datetime]'))
+        .map((time) => time.getAttribute('datetime') || '');
+      const profileDetails = mapIptProfileDetails({
+        // The profile page exposes exact byte counts here; prefer them over
+        // the rounded TB values in the compact header stats bar.
+        uploadedBytes: doc.querySelector('.upf-stat--up .ipx-stat__sub')?.textContent,
+        downloadedBytes: doc.querySelector('.upf-stat--down .ipx-stat__sub')?.textContent,
+        userClass: doc.querySelector('.upf-class')?.textContent ||
+          doc.querySelector('span.up-class-badge')?.textContent,
+        joinedAt: profileTimes[0],
+        lastSeenAt: profileTimes[1],
+      });
+      Object.assign(stats, profileDetails);
+
+      // Older IPT profile layouts used .up-field instead of the current .upf-meta.
       for (const field of doc.querySelectorAll('.up-field')) {
         const label = (field.querySelector('.up-field-label')?.textContent || '').replace(/\s+/g, ' ').trim();
         const value = (field.querySelector('.up-field-value')?.textContent || '').replace(/\s+/g, ' ').trim();
         const date = value.match(/^\d{4}-\d{2}-\d{2}/);
-        if (date && label === 'Join Date') stats.joined_at = date[0];
-        if (date && label === 'Last Seen') stats.last_access = date[0];
+        if (date && label === 'Join Date' && !stats.joined_at) stats.joined_at = date[0];
+        if (date && label === 'Last Seen' && !stats.last_access) stats.last_access = date[0];
+      }
+      if (!stats.user_class) {
+        const vip = doc.querySelector('.hdr-vip');
+        if (vip && /vip/i.test(vip.getAttribute('title') || '')) stats.user_class = 'VIP';
       }
     }
 
