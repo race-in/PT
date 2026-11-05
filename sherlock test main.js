@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.7
+// @version      1.5.8
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -75,10 +75,12 @@
   // A ratio: "2.31", "2,31", "∞", "Inf.", "--". Infinite ratios have no number; Sherlock works it out.
   function parseRatio(text) {
     const s = String(text).trim();
+    // Trackers sometimes use -1 as an "unknown/infinite" sentinel. Never turn it into +1.
+    if (/^[−-]\s*\d/.test(s)) return null;
     if (/^(∞|inf(inity|\.)?|--+|—|-)$/i.test(s)) return { infinite: true, value: null };
     const m = s.match(/\d[\d.,]*/);
     const n = m ? parseLocaleNumber(m[0]) : null;
-    return n === null ? null : { infinite: false, value: n };
+    return n === null || n < 0 ? null : { infinite: false, value: n };
   }
 
   function normLabel(text) {
@@ -94,8 +96,10 @@
   const LABELS = {
     uploaded: [/^(uploaded|upload|up|upped|ul|total uploaded|上传量|上傳量|上传|上傳)$/],
     downloaded: [/^(downloaded|download|down|dl|total downloaded|下载量|下載量|下载|下載)$/],
+    buffer: [/^(buffer|seed buffer|upload buffer)$/],
     ratio: [/^(ratio|share ratio|sharing ratio|share-ratio|分享率)$/],
     required_ratio: [/^(required|required ratio|min(imum)? ratio|minimum required ratio|min\.? ratio)$/],
+    required_class_ratio: [/^(required class ratio|class required ratio|minimum class ratio|min\.? class ratio)$/],
     bonus_points: [/^(bon|bonus|bonus points?|karma|karma points?|seed ?bonus( points?)?|魔力值|魔力)$/, /^(points|credits?|bp)$/],
     seeding: [/^(seeding|seeds?|currently seeding|active seeding|seeding torrents|做种|做種|做种中|做種中)$/],
     leeching: [/^(leeching|leeches|currently leeching|active leeching|downloading|下载中|下載中)$/],
@@ -108,7 +112,7 @@
   };
 
   const STARTS_WITH_SIZE = /^\s*[\d.,'’ ]+\s*[KMGTPE]i?B\b/i;
-  const BYTE_KEYS = ['uploaded', 'downloaded'];
+  const BYTE_KEYS = ['uploaded', 'downloaded', 'buffer'];
   const COUNT_KEYS = ['seeding', 'leeching', 'snatched', 'hit_and_runs', 'uploads', 'forum_posts', 'torrent_comments'];
 
   // pairs: [{label, value}] in page order. The first pair whose label is known and whose value fits wins.
@@ -127,7 +131,7 @@
   function fits(key, text, si) {
     const value = String(text).trim();
     if (BYTE_KEYS.includes(key)) { const n = parseBytes(value, si); return n === null ? undefined : n; }
-    if (key === 'ratio' || key === 'required_ratio') {
+    if (key === 'ratio' || key === 'required_ratio' || key === 'required_class_ratio') {
       const r = parseRatio(value);
       if (!r) return undefined;
       return r.infinite ? null : r.value;
@@ -141,7 +145,7 @@
   // Last resort when the page has no labelled cells: "Uploaded: 1.2 TB" runs in plain text.
   function pairsFromText(text) {
     const pairs = [];
-    const re = /([A-Za-z][A-Za-z &'.\-]{1,28}?)(?:[ \t]*[:：][ \t]*|[ \t]+)((?:∞|\d[\d.,'’]*(?:[ \t]?[KMGTP]i?B)?))(?=\s|$)/g;
+    const re = /([A-Za-z][A-Za-z &'.\-]{1,28}?)(?:[ \t]*[:：][ \t]*|[ \t]+)((?:∞|[−-]?\d[\d.,'’]*(?:[ \t]?[KMGTP]i?B)?))(?=\s|$)/g;
     let m;
     const body = String(text).slice(0, 60000);
     while ((m = re.exec(body)) !== null) pairs.push({ label: m[1], value: m[2] });
@@ -193,6 +197,7 @@
   function knownTrackerDisplayName(host, origin, kind, doc) {
     const hosts = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
     const matches = (fn) => hosts.some((value) => fn(value));
+    if (matches(isDesiGaaneHost)) return 'DesiGaane';
     if (kind === 'digitalcore' || matches(isDigitalCoreHost)) return 'DigitalCore';
     if (kind === 'torrentleech' || matches(isTorrentLeechHost) || isTorrentLeechDocument(doc)) return 'TorrentLeech';
     if (kind === 'rartracker' || matches((value) => value === 'superbits.org' || value.endsWith('.superbits.org'))) return 'SuperBits';
@@ -206,10 +211,10 @@
 
   function guessName(title, host) {
     const parts = String(title || '')
-      .split(/\s+[|\-–—:·»«]+\s+|\s*::\s*/)
+      .split(/\s+[|\-–—:·»«⠶]+\s+|\s*::\s*/)
       .map((part) => cleanTrackerDisplayName(part, host, ''))
       .filter(Boolean);
-    const generic = /^(home|index|login|log in|sign in|welcome|torrents?|profile|user\s+profile|account|user|users?|details?|forum|forums?|dashboard|main|tracker)$/i;
+    const generic = /^(home|index|login|log in|sign in|welcome|browse torrents?|torrents?|profile|user\s+profile|account|user|users?|details?|forum|forums?|dashboard|main|tracker)$/i;
     const profileBoilerplate = /^(?:details?|profile|account|user)\s+(?:for|of)\b/i;
     const candidates = parts.filter((part) => !generic.test(part) && !profileBoilerplate.test(part));
     return candidates.pop() || 'Tracker';
@@ -218,6 +223,7 @@
   function canonicalSavedTrackerName(tracker) {
     tracker = tracker || {};
     return knownTrackerDisplayName(tracker.host, tracker.origin, tracker.kind, null) ||
+      cleanTrackerDisplayName(guessName(tracker.name, tracker.host), tracker.host, tracker.origin) ||
       cleanTrackerDisplayName(tracker.name, tracker.host, tracker.origin) ||
       'Tracker';
   }
@@ -278,6 +284,13 @@
   // "required_ratio" uses floor(uploaded / required_ratio) - downloaded; a missing
   // or non-positive required ratio falls back to the standard 1.0 basis.
   function customTrackerBuffer(stats, bufferBasis) {
+    // An explicit tracker Buffer is authoritative; only infer when the tracker does not supply one.
+    const suppliedBuffer = stats && stats.buffer;
+    if (suppliedBuffer !== null && suppliedBuffer !== undefined && suppliedBuffer !== '' &&
+        Number.isFinite(Number(suppliedBuffer))) {
+      return Number(suppliedBuffer);
+    }
+
     const uploaded = Number(stats && stats.uploaded);
     const downloaded = Number(stats && stats.downloaded);
     if (!Number.isFinite(uploaded) || !Number.isFinite(downloaded)) return null;
@@ -706,6 +719,11 @@
     return host === 'digitalcore.club' || host.endsWith('.digitalcore.club');
   }
 
+  function isDesiGaaneHost(value) {
+    const host = trackerHostname(value);
+    return host === 'desigaane.rocks' || host.endsWith('.desigaane.rocks');
+  }
+
   function trackerNameForNewTracker(title, host, origin, doc) {
     return knownTrackerDisplayName(host, origin, '', doc) ||
       cleanTrackerDisplayName(guessName(title, host), host, origin) ||
@@ -715,7 +733,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, canonicalSavedTrackerName, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -724,7 +742,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.7';
+  const VERSION = '1.5.8';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -998,7 +1016,7 @@
     const bar = doc.querySelector('.ratio-bar, [class*="ratio-bar"]');
     if (!bar) return {};
     const out = {};
-    const keys = { uploaded: 'uploaded', downloaded: 'downloaded', ratio: 'ratio', points: 'bonus_points', bonus: 'bonus_points', seeding: 'seeding', leeching: 'leeching', buffer: null };
+    const keys = { uploaded: 'uploaded', downloaded: 'downloaded', ratio: 'ratio', points: 'bonus_points', bonus: 'bonus_points', seeding: 'seeding', leeching: 'leeching', buffer: 'buffer' };
     bar.querySelectorAll('[class*="ratio-bar__"]').forEach((el) => {
       const m = el.className.match(/ratio-bar__([a-z_-]+)/);
       const key = m && keys[m[1]];
@@ -2181,7 +2199,9 @@
 
   const FIELDS = [
     ['uploaded', 'Uploaded', 'bytes'], ['downloaded', 'Downloaded', 'bytes'],
-    ['ratio', 'Ratio', 'number'], ['bonus_points', 'Bonus points', 'number'],
+    ['buffer', 'Buffer', 'bytes'], ['ratio', 'Ratio', 'number'],
+    ['required_ratio', 'Required Ratio', 'number'], ['required_class_ratio', 'Required Class Ratio', 'number'],
+    ['bonus_points', 'Bonus points', 'number'],
     ['seeding', 'Seeding', 'count'], ['leeching', 'Leeching', 'count'],
     ['snatched', 'Snatched', 'count'], ['user_class', 'Class', 'text'],
   ];
@@ -2360,8 +2380,11 @@
     }
     const now = Date.now();
     const nextStats = Object.assign({}, stats);
-    const nextBuffer = Number.isFinite(Number(nextStats.uploaded)) && Number.isFinite(Number(nextStats.downloaded))
-      ? Number(nextStats.uploaded) - Number(nextStats.downloaded) : null;
+    if (nextStats.ratio !== null && nextStats.ratio !== undefined && nextStats.ratio !== '' &&
+        Number.isFinite(Number(nextStats.ratio)) && Number(nextStats.ratio) < 0) {
+      nextStats.ratio = null;
+    }
+    const nextBuffer = customTrackerBuffer(nextStats, 'one_to_one');
     t.createdAt = Number(t.createdAt) || now;
     t.history = Array.isArray(t.history) ? t.history : [];
     // Keep real observations only. The dashboard uses these for the 24-hour delta and mini chart.
@@ -2580,11 +2603,15 @@
     if (downloadedValue && totalValueStyle) {
       downloadedValue.className = totalValueStyle.className;
     }
+    return bufferBasis;
   }
 
 
   function localRatio(stats) {
-    if (stats.ratio !== null && stats.ratio !== undefined && Number.isFinite(Number(stats.ratio))) return Number(stats.ratio).toFixed(2);
+    const ratio = stats && stats.ratio;
+    if (ratio !== null && ratio !== undefined && Number.isFinite(Number(ratio)) && Number(ratio) >= 0) {
+      return Number(ratio).toFixed(2);
+    }
     const up = Number(stats.uploaded), down = Number(stats.downloaded);
     if (!Number.isFinite(up) || !Number.isFinite(down)) return '—';
     if (down === 0) return up > 0 ? '∞' : '—';
@@ -2603,13 +2630,13 @@
     return (n > 0 ? '+' : n < 0 ? '−' : '') + localBytes(Math.abs(n));
   }
 
-  function bufferHistory(t) {
+  function bufferHistory(t, bufferBasis) {
     const points = Array.isArray(t.history) ? t.history.filter((p) => Number.isFinite(Number(p.buffer))) : [];
     if (points.length) return points.slice(-48).map((p) => Number(p.buffer));
     const stats = t.stats || {};
-    const up = Number(stats.uploaded), down = Number(stats.downloaded);
-    const current = Number.isFinite(up) && Number.isFinite(down) ? up - down : 0;
-    return [current, current, current, current, current, current, current, current];
+    const current = customTrackerBuffer(stats, bufferBasis || 'one_to_one');
+    const value = current === null ? 0 : current;
+    return [value, value, value, value, value, value, value, value];
   }
 
   function sparkline(values) {
@@ -2638,7 +2665,7 @@
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     // Update the three existing summary cards without changing their markup or styling.
-    updateDashboardTotals(trackers);
+    const bufferBasis = updateDashboardTotals(trackers) || 'one_to_one';
     if (!trackers.length) return;
 
     // 1) Add custom trackers to BOTH responsive sidebar navigation lists.
@@ -2703,9 +2730,7 @@
       const stats = tracker.stats || {};
       const uploaded = stats.uploaded === null || stats.uploaded === undefined ? null : Number(stats.uploaded);
       const downloaded = stats.downloaded === null || stats.downloaded === undefined ? null : Number(stats.downloaded);
-      const validTotals = uploaded !== null && downloaded !== null &&
-        Number.isFinite(uploaded) && Number.isFinite(downloaded);
-      const buffer = validTotals ? uploaded - downloaded : null;
+      const buffer = customTrackerBuffer(stats, bufferBasis);
       const history = Array.isArray(tracker.history) ? tracker.history : [];
       const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
       const old = history
@@ -2766,7 +2791,7 @@
           )
         ),
         h('div', { class: 'mt-auto pt-4' },
-          sparkline(bufferHistory(tracker)),
+          sparkline(bufferHistory(tracker, bufferBasis)),
           h('p', { class: 'hint mt-1 flex justify-between gap-2 text-xs' },
             h('span', {}, 'Buffer, 7 days'),
             h('span', {}, 'Tracking since ' + localDate(tracker.createdAt || tracker.lastSync))
