@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.5
+// @version      1.4.6
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -354,6 +354,45 @@
   }
 
   // IPTorrents displays decimal GB/TB units in its account stats bar.
+  function isCinemageddonHost(value) {
+    const host = String(value || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0]
+      .replace(/^www\./, '').replace(/\.$/, '');
+    return host === 'cinemageddon.net' || host.endsWith('.cinemageddon.net');
+  }
+
+  function mapCinemageddonProfileRows(rows, si, statusText) {
+    const stats = resolveStats(rows || [], !!si);
+    const header = String(statusText || '');
+
+    if (stats.ratio === undefined) {
+      const ratio = header.match(/\br\s*:\s*(\d[\d.,]*)/i);
+      if (ratio) {
+        const parsed = parseRatio(ratio[1]);
+        if (parsed && !parsed.infinite) stats.ratio = parsed.value;
+      }
+    }
+    if (stats.uploaded === undefined) {
+      const uploaded = header.match(/\bu\s*:\s*(\d[\d.,]*\s*[KMGTPE]?i?B)\b/i);
+      if (uploaded) stats.uploaded = parseBytes(uploaded[1], !!si);
+    }
+    if (stats.downloaded === undefined) {
+      const downloaded = header.match(/\bd\s*:\s*(\d[\d.,]*\s*[KMGTPE]?i?B)\b/i);
+      if (downloaded) stats.downloaded = parseBytes(downloaded[1], !!si);
+    }
+    const credits = header.match(/\bcredits\s*:\s*(\d[\d.,]*)/i);
+    if (credits && stats.bonus_points === undefined) {
+      stats.bonus_points = parseLocaleNumber(credits[1]);
+    }
+    if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) &&
+        stats.ratio === undefined) {
+      stats.ratio = stats.downloaded > 0
+        ? stats.uploaded / stats.downloaded
+        : (stats.uploaded > 0 ? Infinity : null);
+    }
+    return stats;
+  }
+
   function mapIptProfileDetails(data) {
     data = data || {};
     const out = {};
@@ -433,7 +472,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, mapCinemageddonProfileRows };
     }
     return;
   }
@@ -442,7 +481,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.5';
+  const VERSION = '1.4.6';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -892,6 +931,121 @@
     };
   }
 
+  function parseCinemageddonProfile(doc, profileUrl, origin, si) {
+    const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
+    if (doc.querySelector('input[type="password"]') ||
+        /\/login\.php|\/login\.php\?|name=["']login["']/.test(html)) {
+      throw new ReadError('Cinemageddon login session is not available. Sign in and refresh.');
+    }
+    const statusbar = doc.querySelector('.statusbar');
+    if (!statusbar) throw new ReadError('Cinemageddon status bar was not found. The page may not be authenticated or its layout changed.');
+
+    const userLink = statusbar.querySelector('a[href*="userdetails.php?id="]');
+    let userId = '';
+    let username = '';
+    if (userLink) {
+      try {
+        const link = new URL(userLink.getAttribute('href'), origin);
+        if (link.origin === origin && /\/userdetails\.php$/i.test(link.pathname)) {
+          userId = link.searchParams.get('id') || '';
+        }
+      } catch (e) { /* identity remains empty */ }
+      username = (userLink.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    const rows = [];
+    for (const row of doc.querySelectorAll('table.frames tr')) {
+      const cells = Array.from(row.children).filter((cell) => cell.tagName === 'TD');
+      if (cells.length < 2) continue;
+      const label = (cells[0].textContent || '').replace(/\s+/g, ' ').trim();
+      const value = (cells[1].textContent || '').replace(/\s+/g, ' ').trim();
+      if (label && value) rows.push({ label: label.replace(/\s+/g, ' '), value });
+    }
+
+    const statusText = (statusbar.textContent || '').replace(/\s+/g, ' ').trim();
+    const stats = mapCinemageddonProfileRows(rows, si, statusText);
+
+    const torrentCounts = [
+      ['seeding', statusbar.querySelector('img[alt="seeding"], img[title="seeding"]')],
+      ['leeching', statusbar.querySelector('img[alt="leeching"], img[title="leeching"]')],
+    ];
+    for (const [key, icon] of torrentCounts) {
+      if (!icon) continue;
+      let value = icon.nextElementSibling;
+      while (value && value.tagName !== 'B') value = value.nextElementSibling;
+      if (value) {
+        const count = parseCount(value.textContent || '');
+        if (count !== null) stats[key] = count;
+      }
+    }
+
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('Cinemageddon could not extract both Uploaded and Downloaded from the profile or status bar.');
+    }
+
+    const profile = new URL(profileUrl, origin);
+    const idFromUrl = profile.searchParams.get('id') || '';
+    if (userId && idFromUrl && userId !== idFromUrl) {
+      throw new ReadError('Cinemageddon returned a different member profile than the logged-in account.');
+    }
+    if (!userId) userId = idFromUrl;
+
+    return {
+      kind: 'cinemageddon',
+      userId,
+      username,
+      profileUrl: profile.href,
+      stats,
+    };
+  }
+
+  async function readCinemageddon(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
+
+    let homeDocument = sourceDocument;
+    let homeUrl = pageUrl;
+    if (!homeDocument || !homeDocument.querySelector('.statusbar a[href*="userdetails.php?id="]')) {
+      const result = await request(new URL('/index.php', origin).href, 'text/html');
+      homeDocument = new DOMParser().parseFromString(result.text, 'text/html');
+      homeUrl = result.url || new URL('/index.php', origin).href;
+    }
+
+    const statusLink = homeDocument.querySelector('.statusbar a[href*="userdetails.php?id="]');
+    if (!statusLink) {
+      throw new ReadError('Cinemageddon could not find the signed-in user profile link. Sign in and retry.');
+    }
+
+    const profileUrl = new URL(statusLink.getAttribute('href'), origin);
+    if (profileUrl.origin !== origin || !/\/userdetails\.php$/i.test(profileUrl.pathname) ||
+        !/^\d+$/.test(profileUrl.searchParams.get('id') || '')) {
+      throw new ReadError('Cinemageddon returned an invalid user profile link.');
+    }
+
+    let profileDocument = null;
+    try {
+      const current = new URL(pageUrl, origin);
+      if (sourceDocument && current.origin === origin &&
+          /\/userdetails\.php$/i.test(current.pathname) &&
+          current.searchParams.get('id') === profileUrl.searchParams.get('id')) {
+        profileDocument = sourceDocument;
+      }
+    } catch (e) { /* fetch the profile below */ }
+
+    if (!profileDocument) {
+      const result = await request(profileUrl.href, 'text/html');
+      if (/\/login\.php/i.test(result.url || '')) {
+        throw new ReadError('Cinemageddon session expired. Sign in again and refresh.');
+      }
+      profileDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+
+    return parseCinemageddonProfile(profileDocument, profileUrl.href, origin, !!tracker.si);
+  }
+
   async function readIptorrents(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -954,6 +1108,7 @@
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
+    if (isCinemageddonHost(hostname)) return 'cinemageddon';
     return null;
   }
 
@@ -965,6 +1120,7 @@
     if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
     if (apiType === 'rartracker') return readRartracker(tracker, request);
     if (apiType === 'iptorrents') return readIptorrents(tracker, context);
+    if (apiType === 'cinemageddon') return readCinemageddon(tracker, context);
 
     const si = !!tracker.si;
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
@@ -1218,7 +1374,7 @@
 
   async function openTrackerPanel(existing) {
     const tracker = existing || {
-      host: HOST, origin: location.origin, name: guessName(document.title, HOST), shortName: '', enabled: true, kind: 'auto',
+      host: HOST, origin: location.origin, name: trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST), shortName: '', enabled: true, kind: 'auto',
       profileUrl: null, username: '', userId: '', si: false, logo: null, lastSync: 0, stats: {},
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
@@ -1884,7 +2040,7 @@
     const tracker = {
       host: HOST,
       origin: location.origin,
-      name: guessName(document.title, HOST),
+      name: trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST),
       shortName: '',
       kind: 'auto',
       profileUrl: null,
