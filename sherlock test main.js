@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.0
+// @version      1.4.1
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -287,10 +287,76 @@
     };
   }
 
+
+  // Strict byte-count parsing for JSON APIs. Do not guess units or turn missing values into zero.
+  function apiByteNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+  }
+
+  function apiOptionalNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function apiRatio(uploaded, downloaded) {
+    return downloaded > 0 ? uploaded / downloaded : null;
+  }
+
+  function mapRartrackerStatus(payload) {
+    const user = payload && payload.user;
+    if (!user || user.id === null || user.id === undefined) return null;
+    const uploaded = apiByteNumber(user.uploaded);
+    const downloaded = apiByteNumber(user.downloaded);
+    if (uploaded === null || downloaded === null) return null;
+    return {
+      kind: 'rartracker',
+      userId: String(user.id),
+      username: String(user.username || ''),
+      stats: {
+        uploaded,
+        downloaded,
+        ratio: apiOptionalNumber(user.ratio) ?? apiRatio(uploaded, downloaded),
+        bonus_points: apiOptionalNumber(user.bonuspoang),
+        user_class: user.className || user.class_name || (typeof user.class === 'string' ? user.class : null),
+      },
+    };
+  }
+
+  function mapDigitalCoreStatus(payload) {
+    const user = payload && payload.user;
+    if (!user || user.id === null || user.id === undefined) return null;
+    const uploaded = apiByteNumber(user.uploaded);
+    const downloaded = apiByteNumber(user.downloaded);
+    if (uploaded === null || downloaded === null) return null;
+    const classes = {
+      0: 'Rogue', 10: 'Sentinel', 20: 'Viceroy', 30: 'Sentry', 31: 'Guardian',
+      32: 'Vanguard', 50: 'Uploader', 51: 'Titan', 60: 'Developer',
+      70: 'VIP', 75: 'FLS', 80: 'Moderator', 90: 'Administrator',
+    };
+    const classId = user.class;
+    return {
+      kind: 'digitalcore',
+      userId: String(user.id),
+      username: String(user.username || ''),
+      stats: {
+        uploaded,
+        downloaded,
+        ratio: apiRatio(uploaded, downloaded),
+        bonus_points: apiOptionalNumber(user.bonuspoang),
+        user_class: classId === null || classId === undefined ? null : (classes[String(classId)] || ('Class ' + classId)),
+        seeding: apiOptionalNumber(user.myseedstotal),
+        hit_and_runs: apiOptionalNumber(user.hit_and_run_total) ?? apiOptionalNumber(user.hnr),
+      },
+    };
+  }
+
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus };
     }
     return;
   }
@@ -299,7 +365,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.0';
+  const VERSION = '1.4.1';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -383,6 +449,77 @@
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   }
+
+
+  function parseTrackerApiJson(result, siteName) {
+    try {
+      return JSON.parse(result.text);
+    } catch (e) {
+      const body = String(result.text || '').slice(0, 500).toLowerCase();
+      if (body.includes('<!doctype') || body.includes('<html') || body.includes('<body')) {
+        throw new ReadError(siteName + ' API returned HTML instead of JSON. Login session or Cloudflare challenge may be blocking the request.');
+      }
+      throw new ReadError(siteName + ' API returned invalid JSON.');
+    }
+  }
+
+  async function readRartracker(tracker, request) {
+    const fetcher = request || fetchText;
+    const response = await fetcher('/api/v1/status', 'application/json');
+    const payload = parseTrackerApiJson(response, tracker.name || 'Rartracker');
+    const data = mapRartrackerStatus(payload);
+    if (!data) throw new ReadError('Rartracker /api/v1/status did not contain a signed-in user with valid uploaded and downloaded totals.');
+
+    // This endpoint is part of the public Rartracker schema. Enrichment is optional:
+    // keep the verified status totals if a tracker does not expose every profile field.
+    try {
+      const detailResponse = await fetcher('/api/v1/users/' + encodeURIComponent(data.userId), 'application/json');
+      const detailPayload = parseTrackerApiJson(detailResponse, tracker.name || 'Rartracker');
+      const detail = detailPayload && (detailPayload.user || detailPayload);
+      if (detail && typeof detail === 'object') {
+        const bonus = apiOptionalNumber(detail.bonuspoang);
+        if (bonus !== null) data.stats.bonus_points = bonus;
+        if (!data.username && detail.username) data.username = String(detail.username);
+      }
+    } catch (e) { /* core status is sufficient */ }
+
+    if (!data.username) data.username = data.userId;
+    return data;
+  }
+
+  async function readDigitalCore(tracker, request) {
+    const fetcher = request || fetchText;
+    const response = await fetcher('/api/v1/status', 'application/json');
+    const payload = parseTrackerApiJson(response, 'DigitalCore');
+    const data = mapDigitalCoreStatus(payload);
+    if (!data) throw new ReadError('DigitalCore /api/v1/status did not contain a signed-in user with valid uploaded and downloaded totals.');
+
+    // DigitalCore requires its uid/pass session cookies for user endpoints. The browser's
+    // same-origin fetch or GM request with anonymous:false supplies the current session.
+    // Keep the core status if optional profile enrichment is unavailable.
+    try {
+      const detailResponse = await fetcher('/api/v1/users/' + encodeURIComponent(data.userId), 'application/json');
+      const detailPayload = parseTrackerApiJson(detailResponse, 'DigitalCore');
+      const detail = detailPayload && (detailPayload.user || detailPayload);
+      if (detail && typeof detail === 'object') {
+        const bonus = apiOptionalNumber(detail.bonuspoang);
+        const leeching = apiOptionalNumber(detail.peersLeecher);
+        const hitAndRuns = apiOptionalNumber(detail.hnr);
+        if (bonus !== null) data.stats.bonus_points = bonus;
+        if (leeching !== null) data.stats.leeching = leeching;
+        if (hitAndRuns !== null) data.stats.hit_and_runs = hitAndRuns;
+        if (detail.forumPosts !== undefined) data.stats.forum_posts = apiOptionalNumber(detail.forumPosts);
+        if (detail.torrentComments !== undefined) data.stats.torrent_comments = apiOptionalNumber(detail.torrentComments);
+        if (detail.added) data.stats.joined_at = detail.added;
+        if (detail.last_access) data.stats.last_access = detail.last_access;
+        if (detail.username && !data.username) data.username = String(detail.username);
+      }
+    } catch (e) { /* verified core status remains usable */ }
+
+    if (!data.username) data.username = data.userId;
+    return data;
+  }
+
 
   // Cells and elements that sit next to each other and look like "label, value".
   function extractPairs(doc) {
@@ -501,11 +638,25 @@
 
   // The same reader can operate on the current page or use an authenticated
   // userscript-manager request while Sherlock's dashboard is open.
+  function trackerApiType(tracker) {
+    let hostname = String(tracker && tracker.host || '').toLowerCase().replace(/^www\\./, '');
+    try {
+      if (tracker && tracker.origin) hostname = new URL(tracker.origin).hostname.toLowerCase().replace(/^www\\./, '');
+    } catch (e) { /* fall back to the saved host */ }
+    if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
+    if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
+    return null;
+  }
+
   async function readTracker(tracker, context) {
     context = context || {};
-    const si = !!tracker.si;
     const origin = context.origin || location.origin;
     const request = context.request || fetchText;
+    const apiType = trackerApiType(tracker);
+    if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
+    if (apiType === 'rartracker') return readRartracker(tracker, request);
+
+    const si = !!tracker.si;
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
     const pageUrl = context.pageUrl || location.href;
     const kinds = tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile'];
@@ -1372,6 +1523,9 @@
   }
 
   function looksLikeTracker() {
+    if (trackerApiType({ host: HOST, origin: location.origin })) {
+      return !document.querySelector('input[type="password"]');
+    }
     if (document.querySelector('.ratio-bar, #userinfo_stats')) return true;
     const head = ((document.body && document.body.innerText) || '').slice(0, 6000);
     return /\b(upload(ed)?|up)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(head) && /\b(download(ed)?|down)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(head);
