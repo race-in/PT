@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.13
+// @version      1.3.14
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -260,20 +260,23 @@
       const stats = tracker && tracker.stats || {};
       const rawUploaded = stats.uploaded;
       const rawDownloaded = stats.downloaded;
-      if (rawUploaded === null || rawUploaded === undefined || rawUploaded === '' ||
-          rawDownloaded === null || rawDownloaded === undefined || rawDownloaded === '') continue;
+      const hasUploaded = rawUploaded !== null && rawUploaded !== undefined && rawUploaded !== '';
+      const hasDownloaded = rawDownloaded !== null && rawDownloaded !== undefined && rawDownloaded !== '';
 
-      const trackerUploaded = Number(rawUploaded);
-      const trackerDownloaded = Number(rawDownloaded);
-      if (!Number.isFinite(trackerUploaded) || !Number.isFinite(trackerDownloaded) ||
-          trackerUploaded < 0 || trackerDownloaded < 0) continue;
+      const trackerUploaded = hasUploaded ? Number(rawUploaded) : null;
+      const trackerDownloaded = hasDownloaded ? Number(rawDownloaded) : null;
+      const validUploaded = trackerUploaded !== null && Number.isFinite(trackerUploaded) && trackerUploaded >= 0;
+      const validDownloaded = trackerDownloaded !== null && Number.isFinite(trackerDownloaded) && trackerDownloaded >= 0;
 
-      const trackerBuffer = customTrackerBuffer(stats, bufferBasis || 'one_to_one');
-      if (trackerBuffer === null) continue;
+      // Uploaded and downloaded totals are independent: count either one when available.
+      if (validUploaded) uploaded += trackerUploaded;
+      if (validDownloaded && downloaded !== null) downloaded += trackerDownloaded;
 
-      uploaded += trackerUploaded;
-      if (downloaded !== null) downloaded += trackerDownloaded;
-      buffer += trackerBuffer;
+      // Buffer needs both values and uses the same preference basis as Sherlock.
+      if (validUploaded && validDownloaded) {
+        const trackerBuffer = customTrackerBuffer(stats, bufferBasis || 'one_to_one');
+        if (trackerBuffer !== null) buffer += trackerBuffer;
+      }
     }
 
     return {
@@ -295,7 +298,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.13';
+  const VERSION = '1.3.14';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
