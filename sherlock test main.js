@@ -903,7 +903,7 @@
       });
       return labels.includes('total buffer') &&
         labels.includes('total uploaded') &&
-        labels.includes('buffer, last 24 hours');
+        (labels.includes('buffer, last 24 hours') || labels.includes('total downloaded'));
     });
     if (!summarySection) return;
 
@@ -915,7 +915,7 @@
 
     const bufferCard = findCard('total buffer');
     const uploadedCard = findCard('total uploaded');
-    const downloadedCard = findCard('buffer, last 24 hours');
+    const downloadedCard = findCard('total downloaded') || findCard('buffer, last 24 hours');
     if (!bufferCard || !uploadedCard || !downloadedCard) return;
 
     const nativeBuffer = readNativeMetricBytes(bufferCard);
