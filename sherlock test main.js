@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.9
+// @version      1.3.10
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -266,7 +266,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.9';
+  const VERSION = '1.3.10';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -1011,8 +1011,8 @@
     if (nativeDownloaded < 0) {
       const recovered = readNativeTrackerRows(main);
       if (!recovered) return;
-      nativeBuffer = recovered.buffer;
-      nativeUploaded = recovered.uploaded;
+      // Keep Sherlock's own native Total Buffer and Total Uploaded values intact.
+      // Use the tracker-card ratios only to recover the native downloaded baseline.
       nativeDownloaded = recovered.downloaded;
     }
 
