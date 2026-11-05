@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.7
+// @version      1.3.8
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -266,7 +266,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.7';
+  const VERSION = '1.3.8';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -1026,37 +1026,7 @@
     if (downloadedLabel) downloadedLabel.textContent = 'Total Downloaded';
     writeDashboardMetric(downloadedCard, totals.downloaded);
   }
-otals(customTrackers) {
-    const main = document.querySelector('main') || document.querySelector('#main') || document.body;
-    const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
-      const cards = Array.from(section.children).filter((child) => child.classList.contains('card'));
-      const labels = cards.map((card) => {
-        const label = card.querySelector('.eyebrow');
-        return (label && label.textContent || '').trim().toLowerCase();
-      });
-      return labels.includes('total buffer') &&
-        labels.includes('total uploaded') &&
-        (labels.includes('buffer, last 24 hours') || labels.includes('total downloaded'));
-    });
-    if (!summarySection) return;
 
-    const cards = Array.from(summarySection.children).filter((child) => child.classList.contains('card'));
-    const findCard = (labelText) => cards.find((card) => {
-      const label = card.querySelector('.eyebrow');
-      return (label && label.textContent || '').trim().toLowerCase() === labelText;
-    });
-
-    const bufferCard = findCard('total buffer');
-    const uploadedCard = findCard('total uploaded');
-    const downloadedCard = findCard('total downloaded') || findCard('buffer, last 24 hours');
-    if (!bufferCard || !uploadedCard || !downloadedCard) return;
-
-    const nativeBuffer = readNativeMetricBytes(bufferCard);
-    const nativeUploaded = readNativeMetricBytes(uploadedCard);
-    if (nativeBuffer === null || nativeUploaded === null) return;
-
-    const totals = calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers);
-    if (!totals) return;
 
     writeDashboardMetric(bufferCard, totals.buffer);
     writeDashboardMetric(uploadedCard, totals.uploaded);
