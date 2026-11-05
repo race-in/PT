@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.14
-// @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
+// @version      1.4.0
+// @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
 // @match        https://*/*
@@ -17,9 +17,10 @@
 
 /*
  * Browser-local mode:
- * - Reads your stats on tracker pages where you are already signed in.
+ * - On the first signed-in visit, attempts to detect and add a tracker when valid stats are readable.
  * - Stores custom tracker data in the userscript manager (GM storage).
- * - Displays those entries on the Sherlock dashboard in this same browser/profile.
+ * - While the Sherlock dashboard is open, polls enabled saved trackers at the configured interval.
+ * - Uses the userscript manager's cross-origin request permission for remote tracker reads.
  * - Does not call Sherlock APIs, use a Sherlock token, or send tracker data to a server.
  * - Data is not shared with another browser, device, or Sherlock account session.
  */
@@ -298,7 +299,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.14';
+  const VERSION = '1.4.0';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -336,10 +337,11 @@
     return { text: await res.text(), url: res.url, redirected: res.redirected };
   }
 
-  async function readGazelle() {
+  async function readGazelle(request) {
+    const fetcher = request || fetchText;
     let index;
     try {
-      const result = await fetchText('/ajax.php?action=index', 'application/json');
+      const result = await fetcher('/ajax.php?action=index', 'application/json');
       index = JSON.parse(result.text);
     } catch (e) {
       throw new ReadError('Not a Gazelle tracker, or its index endpoint is unavailable.');
@@ -353,14 +355,14 @@
       bonus_points: toNumber(userStats.bonusPoints), user_class: userStats.class || null,
     };
     try {
-      const result = await fetchText('/ajax.php?action=community_stats&userid=' + encodeURIComponent(response.id), 'application/json');
+      const result = await fetcher('/ajax.php?action=community_stats&userid=' + encodeURIComponent(response.id), 'application/json');
       const community = JSON.parse(result.text).response || {};
       stats.seeding = toNumber(community.seeding);
       stats.leeching = toNumber(community.leeching);
       stats.snatched = toNumber(community.snatched);
     } catch (e) { /* optional */ }
     try {
-      const result = await fetchText('/ajax.php?action=user&id=' + encodeURIComponent(response.id), 'application/json');
+      const result = await fetcher('/ajax.php?action=user&id=' + encodeURIComponent(response.id), 'application/json');
       const user = JSON.parse(result.text).response || {};
       const community = user.community || {};
       if (stats.seeding == null) stats.seeding = toNumber(community.seeding);
@@ -437,7 +439,7 @@
 
   // The member's own profile link, found in the header of a tracker page. It's the link to a profile
   // that sits in the header, not one of the many profile links further down (latest comments, etc).
-  function findProfileLink(doc, base) {
+  function findProfileLink(doc, base, expectedOrigin) {
     const sels = ['a.top-nav__username', '#userinfo_username a.username', '#userinfo_username a', 'a[href*="userdetails.php?id="]', 'a[href*="user.php?id="]', 'a[href*="/users/"]', 'a[href*="/user/"]', 'a[href*="/profile/"]', 'a[href*="/members/"]'];
     for (const sel of sels) {
       for (const a of doc.querySelectorAll(sel)) {
@@ -445,7 +447,7 @@
         if (!PROFILE_HINT.test(href) || NOT_PROFILE.test(href)) continue;
         if (!a.closest(HEADER_ZONE) && !sel.startsWith('a.top-nav') && !sel.startsWith('#userinfo')) continue;
         const url = new URL(href, base);
-        if (url.origin !== location.origin) continue;
+        if (url.origin !== (expectedOrigin || location.origin)) continue;
         return { url: url.href, text: (a.textContent || '').trim() };
       }
     }
@@ -463,12 +465,14 @@
 
   // A profile page, read with the session you are signed in with. Works for UNIT3D, NexusPHP, TBDev,
   // Luminance, TorrentPier and most others: it looks for the stats by their labels.
-  async function readProfile(profileUrl, linkText, si) {
+  async function readProfile(profileUrl, linkText, si, request, origin) {
+    const baseOrigin = origin || location.origin;
+    const fetcher = request || fetchText;
     let target;
-    try { target = new URL(profileUrl, location.origin); } catch (e) { throw new ReadError('That is not a valid address.'); }
-    if (target.origin !== location.origin) throw new ReadError('The profile page has to be on ' + location.host + '.');
+    try { target = new URL(profileUrl, baseOrigin); } catch (e) { throw new ReadError('That is not a valid address.'); }
+    if (target.origin !== baseOrigin) throw new ReadError('The profile page has to be on ' + new URL(baseOrigin).host + '.');
     profileUrl = target.href;
-    const { text, url, redirected } = await fetchText(profileUrl, 'text/html');
+    const { text, url, redirected } = await fetcher(profileUrl, 'text/html');
     const doc = new DOMParser().parseFromString(text, 'text/html');
     const stats = Object.assign({}, resolveStats(extractPairs(doc), si), unit3dBar(doc, si));
     if (stats.uploaded === undefined || stats.downloaded === undefined) {
@@ -482,33 +486,77 @@
     return { kind: 'profile', userId: ident.userId, username: ident.username, profileUrl, stats };
   }
 
-  async function discoverProfile(tracker) {
-    if (tracker.profileUrl) return { url: tracker.profileUrl, text: tracker.username };
-    let link = findProfileLink(document, location.href);
+  async function discoverProfile(tracker, request, origin, sourceDocument, pageUrl) {
+    const baseOrigin = origin || location.origin;
+    const fetcher = request || fetchText;
+    if (tracker.profileUrl) return { url: new URL(tracker.profileUrl, baseOrigin).href, text: tracker.username };
+    let link = sourceDocument ? findProfileLink(sourceDocument, pageUrl || location.href, baseOrigin) : null;
     if (!link) {
-      const { text } = await fetchText('/', 'text/html');
-      link = findProfileLink(new DOMParser().parseFromString(text, 'text/html'), location.origin + '/');
+      const { text } = await fetcher(new URL('/', baseOrigin).href, 'text/html');
+      link = findProfileLink(new DOMParser().parseFromString(text, 'text/html'), baseOrigin + '/', baseOrigin);
     }
     if (!link) throw new ReadError('Could not find your profile link. Paste the address of your profile page below.');
     return link;
   }
 
-  // Reads the tracker the way its kind says, or tries each way when the kind isn't known yet.
-  async function readTracker(tracker) {
+  // The same reader can operate on the current page or use an authenticated
+  // userscript-manager request while Sherlock's dashboard is open.
+  async function readTracker(tracker, context) {
+    context = context || {};
     const si = !!tracker.si;
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
     const kinds = tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile'];
     let lastError;
     for (const kind of kinds) {
       try {
-        if (kind === 'gazelle') return await readGazelle();
-        const link = await discoverProfile(tracker);
-        return await readProfile(link.url, link.text, si);
+        if (kind === 'gazelle') return await readGazelle(request);
+        const link = await discoverProfile(tracker, request, origin, sourceDocument, pageUrl);
+        return await readProfile(link.url, link.text, si, request, origin);
       } catch (e) {
         if (!(e instanceof ReadError)) throw e;
         lastError = e;
       }
     }
     throw lastError || new ReadError('Could not read this tracker.');
+  }
+
+  function managerFetchText(url, accept) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== 'function') return reject(new ReadError('Userscript manager requests are unavailable.'));
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        headers: { Accept: accept || '*/*' },
+        responseType: 'text',
+        timeout: 25000,
+        anonymous: false,
+        onload: (response) => {
+          const status = Number(response.status) || 0;
+          const text = typeof response.responseText === 'string' ? response.responseText
+            : (typeof response.response === 'string' ? response.response : '');
+          const finalUrl = response.finalUrl || url;
+          if (status < 200 || status >= 300) {
+            reject(new ReadError('Tracker request returned HTTP ' + status + ' for ' + new URL(url).pathname + '.'));
+            return;
+          }
+          resolve({ text, url: finalUrl, redirected: finalUrl !== url });
+        },
+        onerror: () => reject(new ReadError('The userscript manager could not connect to this tracker.')),
+        ontimeout: () => reject(new ReadError('The tracker request timed out.')),
+        onabort: () => reject(new ReadError('The tracker request was cancelled.')),
+      });
+    });
+  }
+
+  async function readTrackerRemote(tracker) {
+    let origin;
+    try { origin = new URL(tracker.origin || ('https://' + tracker.host)).origin; }
+    catch (e) { throw new ReadError('The saved tracker address is invalid.'); }
+    const request = (url, accept) => managerFetchText(new URL(url, origin).href, accept);
+    return readTracker(tracker, { request, origin, document: null, pageUrl: origin + '/' });
   }
 
   /* ======================================================================
@@ -829,8 +877,8 @@
         input('profileUrl', 'Profile page address (optional)', 'url', tracker.profileUrl || '', { placeholder: tracker.origin + '/users/yourname' }),
         h('div', { class: 'grid' }, fieldInputs),
         h('label', { class: 'check' }, (refs.si = h('input', { type: 'checkbox', checked: tracker.si, onchange: updatePreview })), 'This tracker counts GB and TB as 1000, not 1024'),
-        h('label', { class: 'check' }, (refs.auto = h('input', { type: 'checkbox', checked: tracker.enabled !== false })), 'Update Sherlock automatically when I visit this tracker'),
-        h('div', { class: 'muted' }, 'Saved only in this browser profile. The custom tracker appears on your Sherlock dashboard when you open it in this same browser. No token, API request or server upload is used.'));
+        h('label', { class: 'check' }, (refs.auto = h('input', { type: 'checkbox', checked: tracker.enabled !== false })), 'Automatically update while the Sherlock dashboard is open or when I visit this tracker'),
+        h('div', { class: 'muted' }, 'Saved only in this browser profile. The tracker appears on your Sherlock dashboard in this browser and auto-updates while that dashboard tab is open. No Sherlock API or token is used.'));
       const preview = h('aside', { class: 'tracker-preview' }, logoBox, previewName,
         h('div', { class: 'preview-stat' }, h('small', {}, 'Uploaded data'), previewUploaded));
       const body = h('div', { class: 'body' }, h('div', { class: 'panel-layout' }, preview, fields));
@@ -859,7 +907,7 @@
     opts = opts || {};
     let stats = opts.stats;
     if (!stats) {
-      const data = await readTracker(t);
+      const data = opts.remote ? await readTrackerRemote(t) : await readTracker(t);
       t.kind = data.kind;
       t.userId = data.userId || t.userId;
       t.username = data.username || t.username;
@@ -897,7 +945,7 @@
     GM_setValue(lockKey, Date.now());
     t.lastAttempt = Date.now();
     try {
-      await push(t);
+      await push(t, { remote: !!opts.remote });
       saveTracker(t);
       if (opts.manual) toast(t.name + ' updated in this browser and on your local Sherlock dashboard.', { kind: 'ok', ttl: 9000,
         actions: store.url ? [{ label: 'Open dashboard', href: store.url + '/dashboard' }] : [] });
@@ -918,7 +966,7 @@
     openPanel((close) => {
       const url = h('input', { type: 'url', value: store.url, placeholder: 'https://your-sherlock-site.example' });
       const interval = h('input', { type: 'number', min: 15, step: 5, value: store.interval });
-      const status = h('div', { class: 'note' }, 'No API or token is used. Open your Sherlock dashboard once in this browser; its address is detected automatically.');
+      const status = h('div', { class: 'note' }, 'No Sherlock API or token is used. Saved trackers auto-update while this dashboard tab is open; the browser must stay open.');
       return h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Sherlock local tracker settings' },
         h('header', {}, h('h2', {}, 'Sherlock settings'), h('button', { class: 'btn', style: 'margin-left:auto', onclick: close }, '×')),
         h('div', { class: 'body' }, status,
@@ -1359,6 +1407,104 @@
     GM_registerMenuCommand('Sherlock: Settings', openSettings);
   }
 
+  async function autoAddTracker() {
+    const cooldownKey = 'sherlock.autoadd.attempt.' + HOST;
+    const lockKey = 'sherlock.autoadd.lock.' + HOST;
+    const now = Date.now();
+    if (now - Number(GM_getValue(cooldownKey, 0)) < 30 * 60 * 1000) return;
+    if (now - Number(GM_getValue(lockKey, 0)) < 60000) return;
+    GM_setValue(cooldownKey, now);
+    GM_setValue(lockKey, now);
+
+    const tracker = {
+      host: HOST,
+      origin: location.origin,
+      name: guessName(document.title, HOST),
+      shortName: '',
+      kind: 'auto',
+      profileUrl: null,
+      username: '',
+      userId: '',
+      si: false,
+      logo: null,
+      lastSync: 0,
+      lastAttempt: now,
+      stats: {},
+      enabled: true,
+      history: [],
+      autoAdded: true,
+    };
+
+    try {
+      const data = await readTracker(tracker);
+      if (!data || !data.stats ||
+          !Number.isFinite(Number(data.stats.uploaded)) || Number(data.stats.uploaded) < 0 ||
+          !Number.isFinite(Number(data.stats.downloaded)) || Number(data.stats.downloaded) < 0) {
+        throw new ReadError('Uploaded and downloaded could not both be verified.');
+      }
+      tracker.kind = data.kind || 'profile';
+      tracker.profileUrl = data.profileUrl || null;
+      tracker.userId = data.userId || '';
+      tracker.username = data.username || data.userId || '';
+      tracker.logo = await detectLogo();
+      tracker.shortName = shortNameOf(tracker.name);
+      await push(tracker, { stats: data.stats });
+      saveTracker(tracker);
+      toast(tracker.name + ' was detected and added automatically.', {
+        kind: 'ok', ttl: 10000,
+        actions: store.url ? [{ label: 'Open Sherlock dashboard', href: store.url + '/dashboard' }] : [],
+      });
+    } catch (e) {
+      const message = e && e.message ? e.message : 'The tracker stats could not be read.';
+      toast('Automatic detection could not add this tracker: ' + message, {
+        kind: 'err', title: 'Sherlock auto-detection',
+        ttl: 14000,
+        actions: [{ label: 'Add tracker manually', onClick: () => openTrackerPanel(null), primary: true }],
+      });
+    } finally {
+      GM_setValue(lockKey, 0);
+    }
+  }
+
+  let dashboardSyncTimer = null;
+  let dashboardSyncRunning = false;
+
+  async function dashboardAutoSync() {
+    if (dashboardSyncRunning || !/\/dashboard\/?$/.test(location.pathname)) return;
+    dashboardSyncRunning = true;
+    try {
+      const due = Object.values(store.trackers)
+        .filter((tracker) => tracker && tracker.host && tracker.enabled !== false)
+        .filter((tracker) => Date.now() - Number(tracker.lastSync || 0) >= store.interval * 60000 &&
+          Date.now() - Number(tracker.lastAttempt || 0) >= 10 * 60000)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+      for (const tracker of due) {
+        // Re-read storage before each request in case the user removed/edited a tracker.
+        const current = store.trackers[tracker.host];
+        if (!current || current.enabled === false) continue;
+        await syncTracker(current, { remote: true });
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+      renderLocalDashboard();
+    } finally {
+      dashboardSyncRunning = false;
+    }
+  }
+
+  function startDashboardAutoSync() {
+    if (dashboardSyncTimer) return;
+    dashboardAutoSync();
+    dashboardSyncTimer = window.setInterval(() => {
+      if (!/\/dashboard\/?$/.test(location.pathname)) {
+        window.clearInterval(dashboardSyncTimer);
+        dashboardSyncTimer = null;
+        return;
+      }
+      dashboardAutoSync();
+    }, 60000);
+  }
+
   function main() {
     registerMenus();
     const isDashboard = /\/dashboard\/?$/.test(location.pathname);
@@ -1366,6 +1512,7 @@
       // The dashboard's own origin is the destination; no API calls are made to it.
       store.url = location.origin;
       renderLocalDashboard();
+      startDashboardAutoSync();
       return;
     }
 
@@ -1376,7 +1523,7 @@
       return;
     }
     if (store.dismissed[HOST] || sessionSkipped.has(HOST)) return;
-    if (looksLikeTracker()) offerToAdd();
+    if (looksLikeTracker()) autoAddTracker();
   }
 
   main();
