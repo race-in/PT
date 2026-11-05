@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.1
+// @version      1.4.2
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -353,10 +353,38 @@
     };
   }
 
+  // IPTorrents displays decimal GB/TB units in its account stats bar.
+  function mapIptStatValues(items) {
+    const out = {};
+    for (const item of items || []) {
+      const label = String(item && item.label || '').trim().toLowerCase();
+      const value = String(item && item.value || '').trim();
+      if (!value) continue;
+      if (label === 'uploaded' || label === 'downloaded') {
+        const bytes = parseBytes(value, true);
+        if (bytes !== null) out[label] = bytes;
+      } else if (label === 'bonus points') {
+        const numberMatch = value.match(/\d[\d.,'’ ]*/);
+        const number = numberMatch ? parseLocaleNumber(numberMatch[0]) : null;
+        if (number !== null) out.bonus_points = number;
+      } else if (label === 'active torrents') {
+        const counts = value.match(/\d+/g);
+        if (counts && counts.length >= 2) {
+          out.seeding = Number(counts[0]);
+          out.leeching = Number(counts[1]);
+        }
+      }
+    }
+    if (Number.isFinite(out.uploaded) && Number.isFinite(out.downloaded)) {
+      out.ratio = out.downloaded > 0 ? out.uploaded / out.downloaded : (out.uploaded > 0 ? Infinity : null);
+    }
+    return out;
+  }
+
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues };
     }
     return;
   }
@@ -365,7 +393,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.1';
+  const VERSION = '1.4.2';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -638,6 +666,155 @@
 
   // The same reader can operate on the current page or use an authenticated
   // userscript-manager request while Sherlock's dashboard is open.
+  function iptValueAfterLabel(element, label) {
+    const clone = element.cloneNode(true);
+    const tip = clone.querySelector('.tTip');
+    if (tip) tip.remove();
+    const raw = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+    return raw || String(element.textContent || '').replace(label, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function iptProfileIdFromUrl(url, origin) {
+    try {
+      const parsed = new URL(url, origin);
+      if (parsed.origin !== origin) return null;
+      const match = parsed.pathname.match(/^\/u\/(\d+)\/?$/);
+      return match ? Number(match[1]) : null;
+    } catch (e) { return null; }
+  }
+
+  function parseIptDocument(doc, hostname, profileId, origin) {
+    const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
+    const title = String(doc.title || '').toLowerCase();
+    if (/\/auth\/login|\/login/.test(html) || doc.querySelector('input[type="password"]')) {
+      throw new ReadError('IPTorrents login session expired. Sign in again and refresh.');
+    }
+    if (/just a moment|checking your browser|cloudflare/.test(title + ' ' + html.slice(0, 5000)) ||
+        doc.querySelector('#cf-challenge-running, .cf-challenge, input[name="cf-turnstile-response"]')) {
+      throw new ReadError('IPTorrents Cloudflare challenge blocked the request.');
+    }
+
+    const statsDiv = doc.querySelector('.stats');
+    if (!statsDiv) throw new ReadError('IPTorrents stats bar was not found. The page may not be authenticated or its layout changed.');
+
+    const userElement = statsDiv.querySelector('.uname');
+    const username = userElement
+      ? (userElement.cloneNode(true).querySelector('.tTip')
+          ? (() => { const clone = userElement.cloneNode(true); const tip = clone.querySelector('.tTip'); if (tip) tip.remove(); return (clone.textContent || '').trim(); })()
+          : (userElement.textContent || '').replace(/^Profile/i, '').trim())
+      : '';
+    let ownId = null;
+    const href = userElement && userElement.getAttribute('href');
+    if (href) {
+      try {
+        const link = new URL(href, origin);
+        const match = link.origin === origin ? link.pathname.match(/^\/u\/(\d+)\/?$/) : null;
+        if (match) ownId = Number(match[1]);
+      } catch (e) { /* leave id unknown */ }
+    }
+
+    const items = [];
+    for (const wrap of statsDiv.querySelectorAll('.tTipWrap')) {
+      const tip = wrap.querySelector('.tTip');
+      const label = (tip && tip.textContent || '').trim();
+      if (!label) continue;
+      items.push({ label, value: iptValueAfterLabel(wrap, label) });
+    }
+    let stats = mapIptStatValues(items);
+
+    const isOwnProfile = profileId !== null && profileId !== undefined && ownId === Number(profileId);
+    if (stats.uploaded === undefined && stats.downloaded === undefined && isOwnProfile) {
+      const fallbackItems = [];
+      for (const card of doc.querySelectorAll('.up-stat')) {
+        const label = (card.querySelector('.up-stat-label')?.textContent || '').trim();
+        const value = (card.querySelector('.up-stat-value')?.textContent || '').trim();
+        if (/^balance$/i.test(label)) fallbackItems.push({ label: 'Bonus Points', value });
+        else fallbackItems.push({ label, value });
+      }
+      stats = Object.assign(stats, mapIptStatValues(fallbackItems));
+    }
+
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('IPTorrents could not extract both Uploaded and Downloaded from its stats bar.');
+    }
+
+    if (isOwnProfile) {
+      const badge = (doc.querySelector('span.up-class-badge')?.textContent || '').replace(/\s+/g, ' ').trim();
+      if (badge) stats.user_class = badge;
+      else {
+        const vip = doc.querySelector('.hdr-vip');
+        if (vip && /vip/i.test(vip.getAttribute('title') || '')) stats.user_class = 'VIP';
+      }
+      for (const field of doc.querySelectorAll('.up-field')) {
+        const label = (field.querySelector('.up-field-label')?.textContent || '').replace(/\s+/g, ' ').trim();
+        const value = (field.querySelector('.up-field-value')?.textContent || '').replace(/\s+/g, ' ').trim();
+        const date = value.match(/^\d{4}-\d{2}-\d{2}/);
+        if (date && label === 'Join Date') stats.joined_at = date[0];
+        if (date && label === 'Last Seen') stats.last_access = date[0];
+      }
+    }
+
+    return {
+      kind: 'iptorrents',
+      userId: ownId ? String(ownId) : (profileId ? String(profileId) : ''),
+      username,
+      stats,
+    };
+  }
+
+  async function readIptorrents(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
+    const host = new URL(origin).hostname;
+
+    let current = null;
+    if (sourceDocument && sourceDocument.querySelector('.stats')) {
+      const profileId = iptProfileIdFromUrl(pageUrl, origin);
+      current = parseIptDocument(sourceDocument, host, profileId, origin);
+    }
+
+    let userId = String((current && current.userId) || tracker.userId || '').trim();
+    if (!/^\d+$/.test(userId)) {
+      // On first discovery, the logged-in member's /u/{id} link is in the stats bar.
+      const home = await request(new URL('/', origin).href, 'text/html');
+      const homeDoc = new DOMParser().parseFromString(home.text, 'text/html');
+      const parsedHome = parseIptDocument(homeDoc, host, null, origin);
+      userId = String(parsedHome.userId || '');
+      if (!/^\d+$/.test(userId)) throw new ReadError('IPTorrents could not find your own /u/{id} profile link.');
+      current = parsedHome;
+    }
+
+    const profileUrl = new URL('/u/' + encodeURIComponent(userId), origin).href;
+    let profileData = null;
+    if (sourceDocument && iptProfileIdFromUrl(pageUrl, origin) === Number(userId)) {
+      profileData = parseIptDocument(sourceDocument, host, Number(userId), origin);
+    } else {
+      try {
+        const result = await request(profileUrl, 'text/html');
+        if (/\/auth\/login|\/login/i.test(result.url || '')) {
+          throw new ReadError('IPTorrents login session expired. Sign in again and refresh.');
+        }
+        const profileDoc = new DOMParser().parseFromString(result.text, 'text/html');
+        profileData = parseIptDocument(profileDoc, host, Number(userId), origin);
+      } catch (e) {
+        // The logged-in stats bar is already sufficient for correct totals.
+        if (!current) throw e;
+      }
+    }
+
+    const chosen = profileData || current;
+    if (!chosen || !Number.isFinite(chosen.stats.uploaded) || !Number.isFinite(chosen.stats.downloaded)) {
+      throw new ReadError('IPTorrents did not return valid Uploaded and Downloaded statistics.');
+    }
+    chosen.userId = chosen.userId || userId;
+    chosen.username = chosen.username || (tracker.username || userId);
+    chosen.profileUrl = profileUrl;
+    return chosen;
+  }
+
   function trackerApiType(tracker) {
     let hostname = String(tracker && tracker.host || '').toLowerCase().replace(/^www\\./, '');
     try {
@@ -645,6 +822,7 @@
     } catch (e) { /* fall back to the saved host */ }
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
+    if (hostname === 'iptorrents.com' || hostname.endsWith('.iptorrents.com')) return 'iptorrents';
     return null;
   }
 
@@ -655,6 +833,7 @@
     const apiType = trackerApiType(tracker);
     if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
     if (apiType === 'rartracker') return readRartracker(tracker, request);
+    if (apiType === 'iptorrents') return readIptorrents(tracker, context);
 
     const si = !!tracker.si;
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
