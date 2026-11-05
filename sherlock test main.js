@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.6
+// @version      1.4.7
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -361,6 +361,25 @@
     return host === 'cinemageddon.net' || host.endsWith('.cinemageddon.net');
   }
 
+  function isCinemageddonDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    const statusUser = doc.querySelector('.statusbar a[href*="userdetails.php?id="]');
+    if (!statusUser) return false;
+    const title = String(doc.title || '');
+    const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+    const keywords = doc.querySelector('meta[name="keywords"]')?.getAttribute('content') || '';
+    return /cinemageddon/i.test(title + ' ' + description + ' ' + keywords);
+  }
+
+  function isCinemageddonTracker(tracker, doc) {
+    tracker = tracker || {};
+    return tracker.kind === 'cinemageddon' ||
+      /^cinemageddon(?:\s|$)/i.test(String(tracker.name || '').trim()) ||
+      isCinemageddonHost(tracker.host) ||
+      isCinemageddonHost(tracker.origin) ||
+      isCinemageddonDocument(doc);
+  }
+
   function mapCinemageddonProfileRows(rows, si, statusText) {
     const stats = resolveStats(rows || [], !!si);
     const header = String(statusText || '');
@@ -472,7 +491,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, mapCinemageddonProfileRows };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows };
     }
     return;
   }
@@ -481,7 +500,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.6';
+  const VERSION = '1.4.7';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1108,7 +1127,7 @@
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
-    if (isCinemageddonHost(hostname)) return 'cinemageddon';
+    if (isCinemageddonTracker(tracker)) return 'cinemageddon';
     return null;
   }
 
@@ -1116,14 +1135,14 @@
     context = context || {};
     const origin = context.origin || location.origin;
     const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
     const apiType = trackerApiType(tracker);
     if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
     if (apiType === 'rartracker') return readRartracker(tracker, request);
     if (apiType === 'iptorrents') return readIptorrents(tracker, context);
-    if (apiType === 'cinemageddon') return readCinemageddon(tracker, context);
+    if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return readCinemageddon(tracker, context);
 
     const si = !!tracker.si;
-    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
     const pageUrl = context.pageUrl || location.href;
     const kinds = tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile'];
     let lastError;
@@ -1374,7 +1393,7 @@
 
   async function openTrackerPanel(existing) {
     const tracker = existing || {
-      host: HOST, origin: location.origin, name: trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST), shortName: '', enabled: true, kind: 'auto',
+      host: HOST, origin: location.origin, name: isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST), shortName: '', enabled: true, kind: 'auto',
       profileUrl: null, username: '', userId: '', si: false, logo: null, lastSync: 0, stats: {},
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
@@ -1989,6 +2008,7 @@
   }
 
   function looksLikeTracker() {
+    if (isCinemageddonDocument(document)) return !document.querySelector('input[type="password"]');
     if (trackerApiType({ host: HOST, origin: location.origin })) {
       return !document.querySelector('input[type="password"]');
     }
@@ -2040,7 +2060,7 @@
     const tracker = {
       host: HOST,
       origin: location.origin,
-      name: trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST),
+      name: isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST),
       shortName: '',
       kind: 'auto',
       profileUrl: null,
