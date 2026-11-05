@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.5
+// @version      1.5.6
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -723,7 +723,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.5';
+  const VERSION = '1.5.6';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1703,24 +1703,27 @@
     const origin = context.origin || location.origin;
     const request = context.request || fetchText;
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
     const apiType = trackerApiType(tracker);
-    if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
-    if (apiType === 'rartracker') return readRartracker(tracker, request);
-    if (apiType === 'iptorrents') return readIptorrents(tracker, context);
-    if (apiType === 'trancetraffic' || isTranceTrafficDocument(sourceDocument)) return readTranceTraffic(tracker, context);
-    if (apiType === 'myanonamouse' || isMyAnonamouseDocument(sourceDocument)) return readMyAnonamouse(tracker, context);
-    if (apiType === 'filelist' || isFileListDocument(sourceDocument)) return readFileList(tracker, context);
-    if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return readCinemageddon(tracker, context);
+    const complete = async (result) =>
+      attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
+
+    if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
+    if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
+    if (apiType === 'iptorrents') return complete(readIptorrents(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'trancetraffic' || isTranceTrafficDocument(sourceDocument)) return complete(readTranceTraffic(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'myanonamouse' || isMyAnonamouseDocument(sourceDocument)) return complete(readMyAnonamouse(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'filelist' || isFileListDocument(sourceDocument)) return complete(readFileList(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return complete(readCinemageddon(tracker, { origin, request, document: sourceDocument, pageUrl }));
 
     const si = !!tracker.si;
-    const pageUrl = context.pageUrl || location.href;
     const kinds = tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile'];
     let lastError;
     for (const kind of kinds) {
       try {
-        if (kind === 'gazelle') return await readGazelle(request);
+        if (kind === 'gazelle') return complete(readGazelle(request));
         const link = await discoverProfile(tracker, request, origin, sourceDocument, pageUrl);
-        return await readProfile(link.url, link.text, si, request, origin);
+        return complete(readProfile(link.url, link.text, si, request, origin));
       } catch (e) {
         if (!(e instanceof ReadError)) throw e;
         lastError = e;
@@ -2099,10 +2102,9 @@
     paintLogo();
     updatePreview();
     refs.profileUrl.addEventListener('change', () => { if (refs.profileUrl.value.trim()) reread(); });
-    if (!existing) {
-      detectLogoAgain();
-      await reread();
-    }
+    if (!existing) detectLogoAgain();
+    // Discover the optional profile address for existing legacy entries when it is missing.
+    if (!existing || !tracker.profileUrl) await reread();
   }
 
   /* ======================================================================
@@ -2612,7 +2614,14 @@
       }
       return true;
     }
-    if (trackerApiType({ host: HOST, origin: location.origin })) {
+    const detectedApiType = trackerApiType({ host: HOST, origin: location.origin });
+    if (detectedApiType) {
+      // Upgrade migration clears stale cooldowns for API-based adapters, including DigitalCore.
+      const versionKey = 'sherlock.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
       return !document.querySelector('input[type="password"]');
     }
     if (document.querySelector('.ratio-bar, #userinfo_stats')) return true;
@@ -2644,6 +2653,9 @@
       if (!t) return toast('This tracker has not been added yet.', { kind: 'err' });
       if (!window.confirm('Remove ' + (t.name || t.host) + ' from this browser’s custom trackers?')) return;
       delete all[HOST]; store.trackers = all;
+      // Permit immediate re-detection after explicit removal.
+      GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
       if (/\/dashboard\/?$/.test(location.pathname)) renderLocalDashboard();
       toast((t.name || t.host) + ' removed from this browser.', { kind: 'ok' });
     });
