@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.4
+// @version      1.5.5
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -714,7 +714,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, canonicalSavedTrackerName, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, canonicalSavedTrackerName, profileAddressFromDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -723,7 +723,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.4';
+  const VERSION = '1.5.5';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1043,6 +1043,78 @@
     const fromLink = linkText && linkText.length <= 64 && !/\s{2,}/.test(linkText) ? linkText : '';
     const username = (slug && !/^\d+$/.test(slug) ? slug : '') || fromLink || '';
     return { userId: id || username.toLowerCase() || null, username };
+  }
+
+  function profileAddressFromDocument(doc, baseOrigin, data, pageUrl, URLCtor) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    const URLClass = URLCtor || (typeof URL !== 'undefined' ? URL : null);
+    if (!URLClass) return null;
+    const profileHint = /\/(?:users?|profile|members?|u)\/[^/?#]+|(?:userdetails|user|profile|member)\.php\?(?:[^#]*&)?id=\d+|\/user\/\d+/i;
+    const notProfile = /(login|logout|register|signup|settings|edit|messages?|inbox|notifications?|bookmarks?|invites?|\/users?\/?$|\/members?\/?$)/i;
+    const headerZone = 'header, nav, #header, #userinfo, #info_block, #userinfo_username, .top-nav, .header, #menu, .user-menu, [class*="userinfo"], [id*="userinfo"], [class*="top-nav"]';
+    let base;
+    try { base = new URLClass(baseOrigin).origin; } catch (e) { return null; }
+    const expectedId = String(data && data.userId || '').trim().toLowerCase();
+    const expectedName = String(data && data.username || '').trim().toLowerCase();
+    const hasExpectedIdentity = !!(expectedId || expectedName);
+    const candidates = [];
+    const seen = new Set();
+
+    const addCandidate = (href, text, element, isCurrentPage) => {
+      if (!href) return;
+      let url;
+      try { url = new URLClass(href, base); } catch (e) { return; }
+      if (url.origin !== base || !profileHint.test(url.pathname + url.search) ||
+          notProfile.test(url.pathname + url.search) || seen.has(url.href)) return;
+      seen.add(url.href);
+      const pathId = (url.pathname.match(/\/(\d+)(?:\/|$)/) || [])[1] || '';
+      const foundId = String(url.searchParams.get('id') || pathId).trim().toLowerCase();
+      const slug = (url.pathname.match(/\/(?:users?|profile|members?|u)\/([^/?#]+)/i) || [])[1] || '';
+      const foundName = String((slug && !/^\d+$/.test(slug) ? slug : text) || '').trim().toLowerCase();
+      const idMatch = !!(expectedId && foundId && expectedId === foundId);
+      const nameMatch = !!(expectedName && foundName && expectedName === foundName);
+      let score = 0;
+      if (idMatch) score += 120;
+      if (nameMatch) score += 90;
+      if (score && element && element.closest && element.closest(headerZone)) score += 15;
+      if (score && isCurrentPage) score += 25;
+      // Without an API/profile identity, only the site's own header profile link is safe.
+      if (!score && !hasExpectedIdentity && element && element.closest &&
+          element.closest(headerZone)) score = 20;
+      if (score > 0) candidates.push({ url: url.href, score });
+    };
+
+    if (pageUrl) addCandidate(pageUrl, '', null, true);
+    for (const anchor of doc.querySelectorAll('a[href]')) {
+      const href = anchor.getAttribute('href') || '';
+      if (!href) continue;
+      addCandidate(href, anchor.textContent || anchor.getAttribute('aria-label') ||
+        anchor.getAttribute('title') || '', anchor, false);
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.length ? candidates[0].url : null;
+  }
+
+  async function attachProfileAddress(data, tracker, context, request) {
+    if (!data || data.profileUrl) return data;
+    if (tracker && tracker.profileUrl) data.profileUrl = tracker.profileUrl;
+    if (data.profileUrl) return data;
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document')
+      ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    let profileUrl = profileAddressFromDocument(sourceDocument, origin, data, pageUrl);
+    const fetcher = request || context.request;
+    if (!profileUrl && fetcher) {
+      try {
+        const home = await fetcher(new URL('/', origin).href, 'text/html');
+        const homeDocument = new DOMParser().parseFromString(home.text, 'text/html');
+        profileUrl = profileAddressFromDocument(homeDocument, origin, data, home.url || new URL('/', origin).href);
+      } catch (e) { /* optional profile URL must not block verified stats */ }
+    }
+    if (profileUrl) data.profileUrl = profileUrl;
+    return data;
   }
 
   // A profile page, read with the session you are signed in with. Works for UNIT3D, NexusPHP, TBDev,
