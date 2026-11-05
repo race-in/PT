@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.1
+// @version      1.5.2
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -405,6 +405,12 @@
     return stats;
   }
 
+  const SHERLOCK_DASHBOARD_BASE_URL = 'https://app.whatstatus.info';
+
+  function sherlockDashboardUrl() {
+    return SHERLOCK_DASHBOARD_BASE_URL.replace(/\/+$/, '') + '/dashboard';
+  }
+
   function isMyAnonamouseHost(value) {
     const host = String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0].replace(/^www\./, '').replace(/\.$/, '');
     return host === 'myanonamouse.net' || host.endsWith('.myanonamouse.net');
@@ -641,7 +647,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -650,8 +656,8 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.1';
-  const DEFAULT_URL = '';
+  const VERSION = '1.5.2';
+  const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
       tracker && (
@@ -710,8 +716,9 @@
   }
 
   const store = {
-    get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
-    set url(v) { GM_setValue('sherlock.url', String(v).trim().replace(/\/+$/, '')); },
+    get url() { return DEFAULT_URL; },
+    // Migrate any previously saved mimas/alias URL to the canonical public dashboard.
+    set url(v) { GM_setValue('sherlock.url', DEFAULT_URL); },
     get interval() { return Math.max(15, Number(GM_getValue('sherlock.interval', 60)) || 60); },
     set interval(v) { GM_setValue('sherlock.interval', Math.max(15, Number(v) || 60)); },
     get trackers() {
@@ -2006,13 +2013,13 @@
 
   function openSettings() {
     openPanel((close) => {
-      const url = h('input', { type: 'url', value: store.url, placeholder: 'https://your-sherlock-site.example' });
+      const url = h('input', { type: 'url', value: store.url, disabled: true, placeholder: DEFAULT_URL });
       const interval = h('input', { type: 'number', min: 15, step: 5, value: store.interval });
       const status = h('div', { class: 'note' }, 'No Sherlock API or token is used. Saved trackers auto-update while this dashboard tab is open; the browser must stay open.');
       return h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Sherlock local tracker settings' },
         h('header', {}, h('h2', {}, 'Sherlock settings'), h('button', { class: 'btn', style: 'margin-left:auto', onclick: close }, '×')),
         h('div', { class: 'body' }, status,
-          h('label', {}, 'Sherlock dashboard address (optional)', url),
+          h('label', {}, 'Sherlock dashboard address', url),
           h('label', {}, 'Try automatic updates at most every … minutes (15 or more)', interval),
           h('div', { class: 'muted' }, 'Custom tracker data is saved by Tampermonkey/Greasemonkey in this browser only. It will not sync to another device or appear to other Sherlock users.'),
           h('div', { class: 'muted' }, 'Trackers on this browser: ' + Object.keys(store.trackers).length)),
@@ -2593,7 +2600,8 @@
     const isDashboard = /\/dashboard\/?$/.test(location.pathname);
     if (isDashboard) {
       // The dashboard's own origin is the destination; no API calls are made to it.
-      store.url = location.origin;
+      // Keep links pinned to the canonical public dashboard, not the VPS origin alias.
+      store.url = DEFAULT_URL;
       renderLocalDashboard();
       startDashboardAutoSync();
       return;
