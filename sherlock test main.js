@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.11
+// @version      1.3.12
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -266,7 +266,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.11';
+  const VERSION = '1.3.12';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -1212,11 +1212,9 @@
             )
           ),
           h('div', {},
-            h('dt', { class: 'eyebrow' }, '24h'),
+            h('dt', { class: 'eyebrow' }, 'Downloaded'),
             h('dd', { class: 'mt-1' },
-              h('span', {
-                class: 'num' + (delta24 === null || delta24 === 0 ? ' text-muted' : ''),
-              }, signedBytes(delta24))
+              h('span', { class: 'num' }, localBytes(downloaded))
             )
           )
         ),
