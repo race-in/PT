@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.3
+// @version      1.5.4
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -157,14 +157,68 @@
   }
 
   // The tracker's name from the page title: "Home :: Aither" -> "Aither", "Aither - Login" -> "Aither".
+  function trackerHostname(value) {
+    return String(value || '').trim().toLowerCase()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+      .replace(/^\/\//, '')
+      .split(/[/:?#]/, 1)[0]
+      .replace(/^www\./, '')
+      .replace(/\.$/, '');
+  }
+
+  function cleanTrackerDisplayName(value, host, origin) {
+    let name = String(value || '').replace(/[\s\u00a0]+/g, ' ').trim();
+    if (!name) return '';
+    name = name.replace(/\bhttps?:\/\/[^\s<>()]+/gi, ' ');
+    const hostnames = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
+    for (const hostname of hostnames) {
+      const escaped = hostname.replace(/[.*+?^$|(){}[\]\\]/g, '\\$&');
+      name = name.replace(new RegExp('(^|[^a-z0-9])(?:www\\\\.)?' + escaped + '(?=$|[^a-z0-9])', 'gi'), ' ');
+    }
+    name = name
+      .replace(/\b(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s<>()]*)?/gi, ' ')
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, ' ')
+      .replace(/\(\s*\)|\[\s*\]|\{\s*\}/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s|:·»«–—\-()[\]{}]+|[\s|:·»«–—\-()[\]{}]+$/g, '')
+      .trim();
+    name = name
+      .replace(/^(?:details?|profile|account|user)\s+(?:for|of)\s+.+$/i, '')
+      .replace(/\s+(?:details?|profile|account)\s+(?:for|of)\s+.+$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return name ? name.slice(0, 40) : '';
+  }
+
+  function knownTrackerDisplayName(host, origin, kind, doc) {
+    const hosts = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
+    const matches = (fn) => hosts.some((value) => fn(value));
+    if (kind === 'digitalcore' || matches(isDigitalCoreHost)) return 'DigitalCore';
+    if (kind === 'rartracker' || matches((value) => value === 'superbits.org' || value.endsWith('.superbits.org'))) return 'SuperBits';
+    if (kind === 'iptorrents' || matches(isIptorrentsHost)) return 'IPTorrents';
+    if (kind === 'trancetraffic' || matches(isTranceTrafficHost) || isTranceTrafficDocument(doc)) return 'TranceTraffic';
+    if (kind === 'myanonamouse' || matches(isMyAnonamouseHost) || isMyAnonamouseDocument(doc)) return 'MyAnonamouse';
+    if (kind === 'filelist' || matches(isFileListHost) || isFileListDocument(doc)) return 'FileList';
+    if (kind === 'cinemageddon' || matches(isCinemageddonHost) || isCinemageddonDocument(doc)) return 'Cinemageddon';
+    return '';
+  }
+
   function guessName(title, host) {
-    const fallback = host.replace(/^www\./, '').split('.')[0].replace(/^./, (c) => c.toUpperCase());
-    const parts = String(title || '').split(/\s+[|\-–—:·»«]+\s+|\s*::\s*/).map((s) => s.trim()).filter(Boolean);
-    const generic = /^(home|index|login|log in|sign in|welcome|torrents?|profile|account|user|forums?|dashboard|main)$/i;
-    const hostWord = host.replace(/^www\./, '').split('.')[0].toLowerCase();
-    const named = parts.find((p) => p.toLowerCase().replace(/[^a-z0-9]/g, '').includes(hostWord.replace(/[^a-z0-9]/g, '')));
-    const pick = named || parts.filter((p) => !generic.test(p)).pop() || fallback;
-    return pick.length > 40 ? fallback : pick;
+    const parts = String(title || '')
+      .split(/\s+[|\-–—:·»«]+\s+|\s*::\s*/)
+      .map((part) => cleanTrackerDisplayName(part, host, ''))
+      .filter(Boolean);
+    const generic = /^(home|index|login|log in|sign in|welcome|torrents?|profile|user\s+profile|account|user|users?|details?|forum|forums?|dashboard|main|tracker)$/i;
+    const profileBoilerplate = /^(?:details?|profile|account|user)\s+(?:for|of)\b/i;
+    const candidates = parts.filter((part) => !generic.test(part) && !profileBoilerplate.test(part));
+    return candidates.pop() || 'Tracker';
+  }
+
+  function canonicalSavedTrackerName(tracker) {
+    tracker = tracker || {};
+    return knownTrackerDisplayName(tracker.host, tracker.origin, tracker.kind, null) ||
+      cleanTrackerDisplayName(tracker.name, tracker.host, tracker.origin) ||
+      'Tracker';
   }
 
   function shortNameOf(name) {
@@ -652,19 +706,15 @@
   }
 
   function trackerNameForNewTracker(title, host, origin, doc) {
-    const identity = { host, origin };
-    if (isDigitalCoreHost(host) || isDigitalCoreHost(origin)) return 'DigitalCore';
-    if (isTranceTrafficTracker(identity, doc)) return 'TranceTraffic';
-    if (isMyAnonamouseTracker(identity, doc)) return 'MyAnonamouse';
-    if (isFileListTracker(identity, doc)) return 'FileList';
-    if (isCinemageddonTracker(identity, doc)) return 'Cinemageddon';
-    return guessName(title, host);
+    return knownTrackerDisplayName(host, origin, '', doc) ||
+      cleanTrackerDisplayName(guessName(title, host), host, origin) ||
+      'Tracker';
   }
 
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, canonicalSavedTrackerName, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -673,7 +723,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.3';
+  const VERSION = '1.5.4';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -743,8 +793,22 @@
       try { all = JSON.parse(GM_getValue('sherlock.trackers', '{}')) || {}; }
       catch (e) { all = {}; }
       const result = normalizeIptorrentsTrackerStore(all);
-      if (result.changed) GM_setValue('sherlock.trackers', JSON.stringify(result.trackers));
-      return result.trackers;
+      const trackers = result.trackers;
+      let changed = result.changed;
+      Object.values(trackers).forEach((tracker) => {
+        if (!tracker || typeof tracker !== 'object') return;
+        const cleanName = canonicalSavedTrackerName(tracker);
+        if (tracker.name !== cleanName) {
+          tracker.name = cleanName;
+          tracker.shortName = shortNameOf(cleanName);
+          changed = true;
+        } else if (!tracker.shortName) {
+          tracker.shortName = shortNameOf(cleanName);
+          changed = true;
+        }
+      });
+      if (changed) GM_setValue('sherlock.trackers', JSON.stringify(trackers));
+      return trackers;
     },
     set trackers(v) { GM_setValue('sherlock.trackers', JSON.stringify(v)); },
     get dismissed() { try { return JSON.parse(GM_getValue('sherlock.dismissed', '{}')) || {}; } catch (e) { return {}; } },
@@ -760,10 +824,10 @@
     const all = store.trackers;
     const key = isIptorrentsHost(t.host) || isIptorrentsHost(t.origin) ? 'iptorrents.com' : t.host;
     t.host = key;
-    if (isDigitalCoreHost(t.host) || isDigitalCoreHost(t.origin)) {
-      t.name = 'DigitalCore';
-      t.shortName = shortNameOf('DigitalCore');
-    }
+    const cleanName = canonicalSavedTrackerName(t);
+    if (t.name !== cleanName) t.shortName = shortNameOf(cleanName);
+    t.name = cleanName;
+    if (!t.shortName) t.shortName = shortNameOf(cleanName);
     all[key] = t;
     store.trackers = all;
   }
@@ -2630,13 +2694,6 @@
 
     const tracker = store.trackers[HOST];
     if (tracker) {
-      // Keep DigitalCore's visible tracker name clean, including entries added by older versions.
-      if ((isDigitalCoreHost(tracker.host) || isDigitalCoreHost(tracker.origin)) &&
-          (tracker.name !== 'DigitalCore' || tracker.shortName !== shortNameOf('DigitalCore'))) {
-        tracker.name = 'DigitalCore';
-        tracker.shortName = shortNameOf('DigitalCore');
-        saveTracker(tracker);
-      }
       // Remember the latest working mirror so dashboard remote sync uses it.
       if (trackerApiType({ host: HOST, origin: location.origin }) === 'iptorrents') {
         tracker.host = 'iptorrents.com';
