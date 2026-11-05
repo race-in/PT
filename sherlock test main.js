@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.0
+// @version      1.5.1
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -354,6 +354,57 @@
   }
 
   // IPTorrents displays decimal GB/TB units in its account stats bar.
+  function isTranceTrafficHost(value) {
+    const host = String(value || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0]
+      .replace(/^www\./, '').replace(/\.$/, '');
+    return host === 'trancetraffic.com' || host.endsWith('.trancetraffic.com');
+  }
+
+  function tranceTrafficStatusLink(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    for (const link of doc.querySelectorAll('a[href*="userdetails.php?id="]')) {
+      const cell = link.closest && link.closest('td.layout');
+      if (cell && /^\s*Welcome back\s*,/i.test(cell.textContent || '')) return link;
+    }
+    return null;
+  }
+
+  function isTranceTrafficDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return /trancetraffic/i.test(String(doc.title || '')) && !!tranceTrafficStatusLink(doc);
+  }
+
+  function isTranceTrafficTracker(tracker, doc) {
+    tracker = tracker || {};
+    return tracker.kind === 'trancetraffic' ||
+      /^trancetraffic(?:\s|$)/i.test(String(tracker.name || '').trim()) ||
+      isTranceTrafficHost(tracker.host) ||
+      isTranceTrafficHost(tracker.origin) ||
+      isTranceTrafficDocument(doc);
+  }
+
+  function mapTranceTrafficProfileRows(rows, statusText) {
+    const stats = resolveStats(rows || [], false);
+    const header = String(statusText || '').replace(/[\s\u00a0]+/g, ' ').trim();
+    if (stats.ratio === undefined) {
+      const ratio = header.match(/\bRatio\s*:\s*(\d[\d.,]*)/i);
+      if (ratio) { const parsed = parseRatio(ratio[1]); if (parsed && !parsed.infinite) stats.ratio = parsed.value; }
+    }
+    if (stats.uploaded === undefined) {
+      const uploaded = header.match(/\bUploaded\s*:\s*(\d[\d.,]*\s*[KMGTPE]?i?B)\b/i);
+      if (uploaded) stats.uploaded = parseBytes(uploaded[1], false);
+    }
+    if (stats.downloaded === undefined) {
+      const downloaded = header.match(/\bDownloaded\s*:\s*(\d[\d.,]*\s*[KMGTPE]?i?B)\b/i);
+      if (downloaded) stats.downloaded = parseBytes(downloaded[1], false);
+    }
+    if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) && stats.ratio === undefined) {
+      stats.ratio = stats.downloaded > 0 ? stats.uploaded / stats.downloaded : (stats.uploaded > 0 ? Infinity : null);
+    }
+    return stats;
+  }
+
   function isMyAnonamouseHost(value) {
     const host = String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0].replace(/^www\./, '').replace(/\.$/, '');
     return host === 'myanonamouse.net' || host.endsWith('.myanonamouse.net');
@@ -590,7 +641,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows };
     }
     return;
   }
@@ -599,7 +650,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.0';
+  const VERSION = '1.5.1';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1049,6 +1100,86 @@
     };
   }
 
+  function parseTranceTrafficProfile(doc, profileUrl, origin, si) {
+    const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
+    if (doc.querySelector('input[type="password"]') || /\/login\.php(?:[?#"']|$)|name=["']login["']/.test(html)) {
+      throw new ReadError('TranceTraffic login session is not available. Sign in and refresh.');
+    }
+    const statusLink = tranceTrafficStatusLink(doc);
+    if (!statusLink) throw new ReadError('TranceTraffic logged-in status bar was not found.');
+    const statusUrl = new URL(statusLink.getAttribute('href'), origin);
+    const userId = statusUrl.origin === origin && /^\/userdetails\.php$/i.test(statusUrl.pathname) ? (statusUrl.searchParams.get('id') || '') : '';
+    if (!/^\d+$/.test(userId)) throw new ReadError('TranceTraffic could not identify the logged-in user.');
+
+    const rows = [];
+    for (const row of doc.querySelectorAll('table tr')) {
+      const cells = Array.from(row.children).filter((cell) => cell.tagName === 'TD');
+      if (cells.length < 2 || !cells[0].classList.contains('rowhead')) continue;
+      const label = (cells[0].textContent || '').replace(/[\s\u00a0]+/g, ' ').trim();
+      const value = (cells[1].textContent || '').replace(/[\s\u00a0]+/g, ' ').trim();
+      if (label && value) rows.push({ label, value });
+    }
+
+    const statusCell = statusLink.closest('td.layout');
+    const statusText = (statusCell && statusCell.textContent || '').replace(/[\s\u00a0]+/g, ' ').trim();
+    const stats = mapTranceTrafficProfileRows(rows, statusText);
+    for (const [key, selector] of [
+      ['seeding', 'img[alt="Torrents seeding"], img[title="Torrents seeding"]'],
+      ['leeching', 'img[alt="Torrents leeching"], img[title="Torrents leeching"]'],
+    ]) {
+      const icon = statusCell && statusCell.querySelector(selector);
+      const value = icon && icon.nextElementSibling;
+      if (value) { const count = parseCount(value.textContent || ''); if (count !== null) stats[key] = count; }
+    }
+
+    const requestedProfile = new URL(profileUrl, origin);
+    if (requestedProfile.origin !== origin || !/^\/userdetails\.php$/i.test(requestedProfile.pathname) ||
+        requestedProfile.searchParams.get('id') !== userId) {
+      throw new ReadError('TranceTraffic returned a profile that does not match the logged-in account.');
+    }
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('TranceTraffic could not read both Uploaded and Downloaded values.');
+    }
+    const titleMatch = String(doc.title || '').match(/Details for\s+(.+?)\s*$/i);
+    const username = titleMatch ? titleMatch[1].trim() : (statusLink.textContent || '').trim();
+    return { kind: 'trancetraffic', userId, username, profileUrl: requestedProfile.href, stats };
+  }
+
+  async function readTranceTraffic(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
+    let homeDocument = sourceDocument;
+    let statusLink = tranceTrafficStatusLink(homeDocument);
+    if (!statusLink) {
+      const result = await request(new URL('/', origin).href, 'text/html');
+      homeDocument = new DOMParser().parseFromString(result.text, 'text/html');
+      statusLink = tranceTrafficStatusLink(homeDocument);
+    }
+    if (!statusLink) throw new ReadError('TranceTraffic could not find the logged-in profile link. Sign in and retry.');
+    const profileUrl = new URL(statusLink.getAttribute('href'), origin);
+    if (profileUrl.origin !== origin || !/^\/userdetails\.php$/i.test(profileUrl.pathname) ||
+        !/^\d+$/.test(profileUrl.searchParams.get('id') || '')) {
+      throw new ReadError('TranceTraffic returned an invalid userdetails.php profile link.');
+    }
+
+    let profileDocument = null;
+    try {
+      const current = new URL(pageUrl, origin);
+      if (sourceDocument && current.origin === origin && /^\/userdetails\.php$/i.test(current.pathname) &&
+          current.searchParams.get('id') === profileUrl.searchParams.get('id')) profileDocument = sourceDocument;
+    } catch (e) { /* fetch profile below */ }
+
+    if (!profileDocument) {
+      const result = await request(profileUrl.href, 'text/html');
+      if (/\/login\.php/i.test(result.url || '')) throw new ReadError('TranceTraffic session expired. Sign in again and refresh.');
+      profileDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+    return parseTranceTrafficProfile(profileDocument, profileUrl.href, origin, !!tracker.si);
+  }
+
   function parseMyAnonamouseProfile(doc, profileUrl, origin, si) {
     const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
     if (doc.querySelector('input[type="password"]') || /\/login(?:\.php)?(?:[?#"']|$)|name=["']login["']/.test(html)) {
@@ -1396,6 +1527,7 @@
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
+    if (isTranceTrafficTracker(tracker)) return 'trancetraffic';
     if (isMyAnonamouseTracker(tracker)) return 'myanonamouse';
     if (isFileListTracker(tracker)) return 'filelist';
     if (isCinemageddonTracker(tracker)) return 'cinemageddon';
@@ -1411,6 +1543,7 @@
     if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
     if (apiType === 'rartracker') return readRartracker(tracker, request);
     if (apiType === 'iptorrents') return readIptorrents(tracker, context);
+    if (apiType === 'trancetraffic' || isTranceTrafficDocument(sourceDocument)) return readTranceTraffic(tracker, context);
     if (apiType === 'myanonamouse' || isMyAnonamouseDocument(sourceDocument)) return readMyAnonamouse(tracker, context);
     if (apiType === 'filelist' || isFileListDocument(sourceDocument)) return readFileList(tracker, context);
     if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return readCinemageddon(tracker, context);
@@ -1666,7 +1799,7 @@
 
   async function openTrackerPanel(existing) {
     const tracker = existing || {
-      host: HOST, origin: location.origin, name: isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST))), shortName: '', enabled: true, kind: 'auto',
+      host: HOST, origin: location.origin, name: isTranceTrafficDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'trancetraffic' ? 'TranceTraffic' : (isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)))), shortName: '', enabled: true, kind: 'auto',
       profileUrl: null, username: '', userId: '', si: false, logo: null, lastSync: 0, stats: {},
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
@@ -2281,6 +2414,12 @@
   }
 
   function looksLikeTracker() {
+    if (isTranceTrafficDocument(document)) {
+      if (document.querySelector('input[type="password"]')) return false;
+      const versionKey = 'sherlock.trancetraffic.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) { GM_setValue(versionKey, VERSION); GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0); }
+      return true;
+    }
     if (isMyAnonamouseDocument(document)) {
       if (document.querySelector('input[type="password"]')) return false;
       const versionKey = 'sherlock.myanonamouse.autodetect.version.' + PAGE_HOST;
@@ -2360,7 +2499,7 @@
     const tracker = {
       host: HOST,
       origin: location.origin,
-      name: isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST))),
+      name: isTranceTrafficDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'trancetraffic' ? 'TranceTraffic' : (isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)))),
       shortName: '',
       kind: 'auto',
       profileUrl: null,
