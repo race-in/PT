@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.4
+// @version      1.3.5
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -183,7 +183,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.4';
+  const VERSION = '1.3.5';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -866,32 +866,81 @@
   }
 
   function renderLocalDashboard() {
-    // Remove only custom content from a previous render. Native Sherlock cards remain untouched.
+    // Remove only custom content from an earlier render. Never remove native Sherlock tracker items.
     const previous = document.getElementById('sherlock-local-trackers');
     if (previous) previous.remove();
     document.querySelectorAll('[data-sherlock-custom-host]').forEach((el) => el.remove());
+    document.querySelectorAll('[data-sherlock-custom-nav-host]').forEach((el) => el.remove());
 
     const trackers = Object.values(store.trackers)
       .filter((tracker) => tracker && tracker.host)
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (!trackers.length) return;
 
-    // Keep the same card design used by Sherlock's native tracker cards,
-    // but put custom trackers in their own section immediately below them.
+    // 1) Add custom trackers to BOTH responsive sidebar navigation lists.
+    // Match the native sidebar row: logo | tracker name | uploaded amount.
+    document.querySelectorAll('nav[aria-label="Main"]').forEach((nav) => {
+      const trackerHeading = Array.from(nav.querySelectorAll('p.eyebrow')).find((el) =>
+        /^trackers$/i.test((el.textContent || '').trim())
+      );
+      if (!trackerHeading) return;
+
+      const addTrackerLink = Array.from(nav.querySelectorAll('a[href="/trackers/add"]'))[0] || null;
+
+      trackers.forEach((tracker) => {
+        const stats = tracker.stats || {};
+        const uploaded = stats.uploaded === null || stats.uploaded === undefined ? null : Number(stats.uploaded);
+        const uploadedLabel = uploaded !== null && Number.isFinite(uploaded) ? localBytes(uploaded) : '—';
+
+        const logo = tracker.logo
+          ? h('img', {
+              alt: '',
+              class: 'size-5 shrink-0 rounded-md object-contain',
+              src: tracker.logo,
+            })
+          : h('span', {
+              class: 'size-5 shrink-0 rounded-md bg-sunken flex items-center justify-center text-[9px] font-semibold text-muted',
+            }, (tracker.shortName || 'TRK').slice(0, 4));
+
+        const item = h('a', {
+          class: 'nav-link',
+          href: tracker.origin || '#',
+          target: '_blank',
+          rel: 'noopener noreferrer',
+          title: tracker.name || tracker.host,
+          'data-sherlock-custom-nav-host': tracker.host,
+        },
+          logo,
+          h('span', {
+            class: 'flex-1 truncate',
+          }, tracker.name || tracker.host),
+          h('span', {
+            class: 'text-xs text-muted',
+          }, uploadedLabel)
+        );
+
+        if (addTrackerLink && addTrackerLink.parentNode === nav) {
+          addTrackerLink.before(item);
+        } else {
+          trackerHeading.after(item);
+        }
+      });
+    });
+
+    // 2) Render dashboard cards with the SAME layout as Sherlock's native tracker cards.
+    // The only card metrics remain Buffer, Ratio and 24h; Uploaded is shown in the sidebar above.
     const section = h('section', {
       id: 'sherlock-local-trackers',
-      class: 'mt-6',
+      class: 'mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3',
       'aria-label': 'Custom trackers',
     });
-    const heading = h('h2', { class: 'eyebrow mb-3' }, 'Custom Trackers');
-    const grid = h('div', { class: 'grid gap-3 sm:grid-cols-2 lg:grid-cols-3' });
 
     trackers.forEach((tracker) => {
       const stats = tracker.stats || {};
       const uploaded = stats.uploaded === null || stats.uploaded === undefined ? null : Number(stats.uploaded);
       const downloaded = stats.downloaded === null || stats.downloaded === undefined ? null : Number(stats.downloaded);
-      const validUploaded = uploaded !== null && Number.isFinite(uploaded);
-      const validTotals = validUploaded && downloaded !== null && Number.isFinite(downloaded);
+      const validTotals = uploaded !== null && downloaded !== null &&
+        Number.isFinite(uploaded) && Number.isFinite(downloaded);
       const buffer = validTotals ? uploaded - downloaded : null;
       const history = Array.isArray(tracker.history) ? tracker.history : [];
       const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
@@ -929,16 +978,7 @@
           }, tracker.name || tracker.host),
           status
         ),
-        h('dl', { class: 'mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm' },
-          h('div', {},
-            h('dt', { class: 'eyebrow' }, 'Uploaded'),
-            h('dd', { class: 'mt-1' },
-              h('span', {
-                class: 'num',
-                title: validUploaded ? Math.round(uploaded).toLocaleString() + ' bytes' : '',
-              }, validUploaded ? localBytes(uploaded) : '—')
-            )
-          ),
+        h('dl', { class: 'mt-4 grid grid-cols-3 gap-2 text-sm' },
           h('div', {},
             h('dt', { class: 'eyebrow' }, 'Buffer'),
             h('dd', { class: 'mt-1' },
@@ -972,26 +1012,23 @@
         )
       );
 
-      grid.appendChild(card);
+      section.appendChild(card);
     });
 
-    section.append(heading, grid);
-
     const main = document.querySelector('main') || document.querySelector('#main') || document.body;
-
-    // Find Sherlock's existing tracker-card section and place the custom section after it.
     const nativeGrid = Array.from(main.querySelectorAll('section')).find((el) =>
       el !== section &&
       el.classList.contains('grid') &&
       el.querySelector('a[href^="/trackers/"] .card, a.card[href^="/trackers/"]')
     );
-    const trackerCards = Array.from(main.querySelectorAll('a.card[href^="/trackers/"]'));
-    const nativeSection = nativeGrid || (trackerCards[0] && trackerCards[0].closest('section'));
+    const nativeTrackerCards = Array.from(main.querySelectorAll('a.card[href^="/trackers/"]'));
+    const nativeSection = nativeGrid || (nativeTrackerCards[0] && nativeTrackerCards[0].parentElement);
 
-    if (nativeSection && nativeSection.parentNode) {
-      nativeSection.insertAdjacentElement('afterend', section);
+    if (nativeSection && nativeSection.classList.contains('grid')) {
+      // Mix custom cards into the same native grid so they look exactly like built-in trackers.
+      nativeSection.append(...Array.from(section.children));
+      section.remove();
     } else {
-      // Fallback for dashboard variants that do not render native tracker cards.
       const dashboardHeading = Array.from(main.querySelectorAll('h1')).find((el) =>
         /dashboard/i.test(el.textContent || '')
       );
