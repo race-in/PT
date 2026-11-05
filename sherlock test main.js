@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.6
+// @version      1.5.7
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -194,6 +194,7 @@
     const hosts = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
     const matches = (fn) => hosts.some((value) => fn(value));
     if (kind === 'digitalcore' || matches(isDigitalCoreHost)) return 'DigitalCore';
+    if (kind === 'torrentleech' || matches(isTorrentLeechHost) || isTorrentLeechDocument(doc)) return 'TorrentLeech';
     if (kind === 'rartracker' || matches((value) => value === 'superbits.org' || value.endsWith('.superbits.org'))) return 'SuperBits';
     if (kind === 'iptorrents' || matches(isIptorrentsHost)) return 'IPTorrents';
     if (kind === 'trancetraffic' || matches(isTranceTrafficHost) || isTranceTrafficDocument(doc)) return 'TranceTraffic';
@@ -714,7 +715,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, canonicalSavedTrackerName, profileAddressFromDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, canonicalSavedTrackerName, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -723,7 +724,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.6';
+  const VERSION = '1.5.7';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1344,6 +1345,239 @@
     return parseTranceTrafficProfile(profileDocument, profileUrl.href, origin, !!tracker.si);
   }
 
+  function isTorrentLeechHost(value) {
+    const host = trackerHostname(value);
+    return host === 'torrentleech.org' || host.endsWith('.torrentleech.org');
+  }
+
+  function isTorrentLeechDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    const title = String(doc.title || '');
+    const meta = doc.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+    const user = doc.querySelector('.user_tlgoduser, .profile-username .user_tlgoduser');
+    const menu = doc.querySelector('.navbar.loggedin .menu-info, .sub-navbar .menu-info');
+    const stats = doc.querySelector('.menu-info [title="Uploaded (Seeding)"], .menu-info [title="Downloaded (Leeching)"], .profile-info .profile-uploaded-details');
+    return /torrentleech/i.test(title + ' ' + meta) && !!user && !!menu && !!stats;
+  }
+
+  function isTorrentLeechTracker(tracker, doc) {
+    tracker = tracker || {};
+    return tracker.kind === 'torrentleech' ||
+      /^torrentleech(?:\s|$)/i.test(String(tracker.name || '').trim()) ||
+      isTorrentLeechHost(tracker.host) ||
+      isTorrentLeechHost(tracker.origin) ||
+      isTorrentLeechDocument(doc);
+  }
+
+  function mapTorrentLeechProfileRows(rows, values) {
+    const stats = resolveStats(rows || [], false);
+    values = values || {};
+    const bytes = (value) => {
+      const parsed = parseBytes(String(value || ''), false);
+      return parsed === null ? undefined : parsed;
+    };
+    const number = (value) => {
+      const parsed = parseRatio(String(value || ''));
+      return parsed && !parsed.infinite ? parsed.value : undefined;
+    };
+    const count = (value) => {
+      const parsed = parseCount(String(value || ''));
+      return parsed === null ? undefined : parsed;
+    };
+    const uploaded = bytes(values.uploaded);
+    const downloaded = bytes(values.downloaded);
+    const ratio = number(values.ratio);
+    const bonus = values.bonus_points === undefined ? undefined : parseLocaleNumber(String(values.bonus_points));
+    const seeding = count(values.seeding);
+    const leeching = count(values.leeching);
+    const hnr = count(values.hit_and_runs);
+    if (uploaded !== undefined) stats.uploaded = uploaded;
+    if (downloaded !== undefined) stats.downloaded = downloaded;
+    if (ratio !== undefined) stats.ratio = ratio;
+    else if (String(values.ratio || '').trim() && /^(?:∞|inf(?:inity|\.)?|--+|—|-)$/i.test(String(values.ratio).trim())) stats.ratio = null;
+    if (bonus !== null && bonus !== undefined) stats.bonus_points = bonus;
+    if (seeding !== undefined) stats.seeding = seeding;
+    if (leeching !== undefined) stats.leeching = leeching;
+    if (hnr !== undefined) stats.hit_and_runs = hnr;
+    if (values.user_class) stats.user_class = String(values.user_class).trim().slice(0, 50);
+    if (values.torrent_comments !== undefined) {
+      const parsed = count(values.torrent_comments);
+      if (parsed !== undefined) stats.torrent_comments = parsed;
+    }
+    if (values.invites !== undefined) {
+      const parsed = count(values.invites);
+      if (parsed !== undefined) stats.invites = parsed;
+    }
+    if (values.joined_at) stats.joined_at = String(values.joined_at).trim();
+    if (values.last_access) stats.last_access = String(values.last_access).trim();
+    if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) && stats.ratio === undefined) {
+      stats.ratio = stats.downloaded > 0 ? stats.uploaded / stats.downloaded : (stats.uploaded > 0 ? Infinity : null);
+    }
+    return stats;
+  }
+
+  function parseTorrentLeechDocument(doc, pageUrl, origin) {
+    const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
+    const title = String(doc.title || '');
+    if (doc.querySelector('input[type="password"]') || /\/user\/account\/login|name=["']password["']/.test(html)) {
+      throw new ReadError('TorrentLeech login session is not available. Sign in and refresh.');
+    }
+    if (!isTorrentLeechDocument(doc)) {
+      throw new ReadError('TorrentLeech logged-in account bar was not found. The page may not be authenticated or its layout changed.');
+    }
+
+    const userNode = doc.querySelector('.user_tlgoduser, .profile-username .user_tlgoduser');
+    const username = (userNode && userNode.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!username) throw new ReadError('TorrentLeech could not identify the signed-in username.');
+
+    const getText = (selector) => {
+      const node = doc.querySelector(selector);
+      return node ? (node.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    };
+    const uploaded = getText('.profile-info .profile-uploaded-details') ||
+      getText('.menu-info [title="Uploaded (Seeding)"] .link') ||
+      getText('.menu-info [title="Uploaded (Seeding)"]');
+    const downloaded = getText('.profile-info .profile-downloaded .profile-info-details') ||
+      getText('.profile-info .profile-downloaded-details') ||
+      getText('.menu-info [title="Downloaded (Leeching)"] .link') ||
+      getText('.menu-info [title="Downloaded (Leeching)"]');
+    const ratio = getText('.profile-info .profile-ratio-details') ||
+      getText('.menu-info [title="Ratio"] .link') ||
+      getText('.menu-info [title="Ratio"]');
+    const bonus = getText('.total-TL-points') ||
+      getText('.menu-info [title*="TL Points"]');
+    const seedingNode = doc.querySelector('.menu-info [title="Uploaded (Seeding)"]');
+    const leechingNode = doc.querySelector('.menu-info [title="Downloaded (Leeching)"]');
+    const hnrNode = doc.querySelector('.menu-info [title="Hit and Run"]');
+    const countInParens = (node) => {
+      const match = String(node && node.textContent || '').match(/\((\d[\d,.'’ ]*)\)/);
+      return match ? match[1] : '';
+    };
+
+    const rows = [];
+    for (const row of doc.querySelectorAll('.profileViewTable tr')) {
+      const cells = Array.from(row.children || []).filter((cell) => cell.tagName === 'TD');
+      if (cells.length < 2) continue;
+      const label = (cells[0].textContent || '').replace(/[\s\u00a0]+/g, ' ').trim().replace(/:$/, '');
+      const value = (cells[1].textContent || '').replace(/[\s\u00a0]+/g, ' ').trim();
+      if (label && value) rows.push({ label, value });
+    }
+    const rowValue = (label) => {
+      const row = rows.find((entry) => entry.label.toLowerCase() === label.toLowerCase());
+      return row ? row.value : '';
+    };
+    const userClass = getText('.label-user-class') || rowValue('Class');
+    const rawHtml = String(doc.documentElement && doc.documentElement.innerHTML || '');
+    const idMatch = rawHtml.match(/\buserLogUserID\s*=\s*['"]?(\d+)['"]?/i) ||
+      rawHtml.match(/\bbookmarkTorrentsUserID\s*=\s*(\d+)/i);
+    const userId = idMatch ? idMatch[1] : '';
+
+    let profileUrl = '';
+    const URLClass = typeof URL !== 'undefined' ? URL : null;
+    if (URLClass) {
+      try {
+        const current = new URLClass(pageUrl || origin, origin);
+        const currentMatch = current.pathname.match(/^\/profile\/([^/]+)\/view\/?$/i);
+        if (current.origin === origin && currentMatch &&
+            decodeURIComponent(currentMatch[1]).toLowerCase() === username.toLowerCase()) profileUrl = current.href;
+      } catch (e) { /* discover profile route below */ }
+      if (!profileUrl) {
+        for (const anchor of doc.querySelectorAll('a[href*="/profile/"]')) {
+          const href = anchor.getAttribute('href') || '';
+          try {
+            const candidate = new URLClass(href, origin);
+            const match = candidate.pathname.match(/^\/profile\/([^/]+)\/view\/?$/i);
+            if (candidate.origin === origin && match &&
+                decodeURIComponent(match[1]).toLowerCase() === username.toLowerCase()) {
+              profileUrl = candidate.href;
+              break;
+            }
+          } catch (e) { /* try next profile link */ }
+        }
+      }
+      if (!profileUrl) {
+        for (const clickable of doc.querySelectorAll('[onclick*="/profile/"]')) {
+          const onclick = clickable.getAttribute('onclick') || '';
+          const match = onclick.match(/(['"])(\/profile\/[^'"]+\/view(?:\?[^'"]*)?)\1/i);
+          if (!match) continue;
+          try {
+            const candidate = new URLClass(match[2], origin);
+            const route = candidate.pathname.match(/^\/profile\/([^/]+)\/view\/?$/i);
+            if (candidate.origin === origin && route &&
+                decodeURIComponent(route[1]).toLowerCase() === username.toLowerCase()) {
+              profileUrl = candidate.href;
+              break;
+            }
+          } catch (e) { /* try next clickable profile link */ }
+        }
+      }
+    }
+    if (!profileUrl && username && URLClass) {
+      profileUrl = new URLClass('/profile/' + encodeURIComponent(username) + '/view', origin).href;
+    }
+
+    const stats = mapTorrentLeechProfileRows(rows, {
+      uploaded, downloaded, ratio, bonus_points: bonus,
+      seeding: countInParens(seedingNode),
+      leeching: countInParens(leechingNode),
+      hit_and_runs: hnrNode && hnrNode.textContent,
+      user_class: userClass,
+      torrent_comments: rowValue('Torrent comments'),
+      invites: rowValue('Invitations'),
+      joined_at: rowValue('Registration date'),
+      last_access: rowValue('Last visit'),
+    });
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('TorrentLeech could not extract both Uploaded and Downloaded values.');
+    }
+    return { kind: 'torrentleech', userId: userId || username.toLowerCase(), username, profileUrl, stats };
+  }
+
+  async function readTorrentLeech(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
+
+    let homeDocument = sourceDocument;
+    if (!isTorrentLeechDocument(homeDocument)) {
+      const result = await request(new URL('/', origin).href, 'text/html');
+      homeDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+    const homeUrl = (() => {
+      try { return new URL(pageUrl || '/', origin).href; } catch (e) { return new URL('/', origin).href; }
+    })();
+    const homeData = parseTorrentLeechDocument(homeDocument, homeUrl, origin);
+    const profileUrl = homeData.profileUrl || tracker.profileUrl;
+    if (!profileUrl) throw new ReadError('TorrentLeech could not find the signed-in profile page.');
+
+    let profileData = null;
+    try {
+      const current = new URL(pageUrl || '/', origin);
+      const target = new URL(profileUrl, origin);
+      if (sourceDocument && current.origin === origin && current.href === target.href) {
+        profileData = homeData;
+      } else {
+        const result = await request(target.href, 'text/html');
+        if (/\/user\/account\/login/i.test(result.url || '')) throw new ReadError('TorrentLeech session expired. Sign in again and refresh.');
+        const profileDocument = new DOMParser().parseFromString(result.text, 'text/html');
+        profileData = parseTorrentLeechDocument(profileDocument, target.href, origin);
+      }
+    } catch (e) {
+      // A valid authenticated top-bar is still sufficient if profile enrichment is temporarily unavailable.
+      if (!homeData || !Number.isFinite(homeData.stats.uploaded) || !Number.isFinite(homeData.stats.downloaded)) throw e;
+    }
+
+    const chosen = profileData || homeData;
+    chosen.profileUrl = profileUrl;
+    chosen.stats = Object.assign({}, homeData.stats || {}, chosen.stats || {});
+    if (!Number.isFinite(chosen.stats.uploaded) || !Number.isFinite(chosen.stats.downloaded)) {
+      throw new ReadError('TorrentLeech did not return valid Uploaded and Downloaded values.');
+    }
+    return chosen;
+  }
+
   function parseMyAnonamouseProfile(doc, profileUrl, origin, si) {
     const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
     if (doc.querySelector('input[type="password"]') || /\/login(?:\.php)?(?:[?#"']|$)|name=["']login["']/.test(html)) {
@@ -1691,6 +1925,7 @@
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
+    if (isTorrentLeechTracker(tracker)) return 'torrentleech';
     if (isTranceTrafficTracker(tracker)) return 'trancetraffic';
     if (isMyAnonamouseTracker(tracker)) return 'myanonamouse';
     if (isFileListTracker(tracker)) return 'filelist';
@@ -1711,6 +1946,7 @@
     if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
     if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
     if (apiType === 'iptorrents') return complete(readIptorrents(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'torrentleech' || isTorrentLeechDocument(sourceDocument)) return complete(readTorrentLeech(tracker, { origin, request, document: sourceDocument, pageUrl }));
     if (apiType === 'trancetraffic' || isTranceTrafficDocument(sourceDocument)) return complete(readTranceTraffic(tracker, { origin, request, document: sourceDocument, pageUrl }));
     if (apiType === 'myanonamouse' || isMyAnonamouseDocument(sourceDocument)) return complete(readMyAnonamouse(tracker, { origin, request, document: sourceDocument, pageUrl }));
     if (apiType === 'filelist' || isFileListDocument(sourceDocument)) return complete(readFileList(tracker, { origin, request, document: sourceDocument, pageUrl }));
@@ -2580,6 +2816,15 @@
   }
 
   function looksLikeTracker() {
+    if (isTorrentLeechDocument(document)) {
+      if (document.querySelector('input[type="password"]')) return false;
+      const versionKey = 'sherlock.torrentleech.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
     if (isTranceTrafficDocument(document)) {
       if (document.querySelector('input[type="password"]')) return false;
       const versionKey = 'sherlock.trancetraffic.autodetect.version.' + PAGE_HOST;
