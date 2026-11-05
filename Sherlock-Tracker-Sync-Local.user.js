@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.2
+// @version      1.3.3
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -183,7 +183,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.2';
+  const VERSION = '1.3.3';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -866,34 +866,37 @@
   }
 
   function renderLocalDashboard() {
-    // Remove our previous section and any cards left behind by the older same-grid version.
+    // Remove previously injected custom cards/section, without touching native Sherlock cards.
     const previous = document.getElementById('sherlock-local-trackers');
     if (previous) previous.remove();
     document.querySelectorAll('[data-sherlock-custom-host]').forEach((el) => el.remove());
 
     const trackers = Object.values(store.trackers)
       .filter((tracker) => tracker && tracker.host)
-      .sort((a, b) => (a.name || a.host || '').localeCompare(b.name || b.host || ''));
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (!trackers.length) return;
 
-    const main = document.querySelector('main') || document.querySelector('#main') || document.body;
+    // Preserve Sherlock's original tracker-card layout and styling.
     const section = h('section', {
       id: 'sherlock-local-trackers',
-      class: 'mt-6',
+      class: 'mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3',
       'aria-label': 'Custom trackers',
     });
-    const heading = h('div', { class: 'mb-3' },
-      h('h2', { class: 'eyebrow' }, 'Custom Trackers')
-    );
-    const grid = h('div', { class: 'grid gap-3 sm:grid-cols-2 lg:grid-cols-3' });
 
     trackers.forEach((tracker) => {
       const stats = tracker.stats || {};
-      const uploaded = stats.uploaded === null || stats.uploaded === undefined
-        ? null
-        : Number(stats.uploaded);
-      const hasUploaded = uploaded !== null && Number.isFinite(uploaded);
-      const uploadedLabel = hasUploaded ? localBytes(uploaded) : '—';
+      const uploaded = stats.uploaded === null || stats.uploaded === undefined ? null : Number(stats.uploaded);
+      const downloaded = stats.downloaded === null || stats.downloaded === undefined ? null : Number(stats.downloaded);
+      const validUploaded = uploaded !== null && Number.isFinite(uploaded);
+      const validTotals = validUploaded && downloaded !== null && Number.isFinite(downloaded);
+      const buffer = validTotals ? uploaded - downloaded : null;
+      const history = Array.isArray(tracker.history) ? tracker.history : [];
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const old = history
+        .filter((point) => Number(point.at) <= dayAgo && Number.isFinite(Number(point.buffer)))
+        .slice(-1)[0];
+      const delta24 = old && buffer !== null ? buffer - Number(old.buffer) : null;
+
       const logo = tracker.logo
         ? h('img', {
             alt: '',
@@ -903,6 +906,10 @@
         : h('span', {
             class: 'size-6 shrink-0 rounded-md bg-sunken flex items-center justify-center text-[9px] font-semibold text-muted',
           }, (tracker.shortName || 'TRK').slice(0, 4));
+
+      const status = tracker.lastError
+        ? h('span', { class: 'tag-down' }, 'Error')
+        : h('span', { class: 'tag-up' }, 'OK');
 
       const card = h('a', {
         class: 'card flex flex-col p-4 hover:border-line-strong',
@@ -916,45 +923,78 @@
           h('span', {
             class: 'flex-1 min-w-0 truncate font-medium',
             title: tracker.name || tracker.host,
-          }, tracker.name || tracker.host)
+          }, tracker.name || tracker.host),
+          status
         ),
-        h('div', { class: 'mt-4' },
-          h('p', { class: 'eyebrow' }, 'Uploaded'),
-          h('p', { class: 'mt-1 text-xl' },
-            h('span', {
-              class: 'num',
-              title: hasUploaded ? Math.round(uploaded).toLocaleString() + ' bytes' : '',
-            }, uploadedLabel)
+        h('dl', { class: 'mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm' },
+          h('div', {},
+            h('dt', { class: 'eyebrow' }, 'Uploaded'),
+            h('dd', { class: 'mt-1' },
+              h('span', {
+                class: 'num',
+                title: validUploaded ? Math.round(uploaded).toLocaleString() + ' bytes' : '',
+              }, validUploaded ? localBytes(uploaded) : '—')
+            )
+          ),
+          h('div', {},
+            h('dt', { class: 'eyebrow' }, 'Buffer'),
+            h('dd', { class: 'mt-1' },
+              h('span', {
+                class: 'num',
+                title: buffer === null ? '' : Math.round(buffer).toLocaleString() + ' bytes',
+              }, localBytes(buffer))
+            )
+          ),
+          h('div', {},
+            h('dt', { class: 'eyebrow' }, 'Ratio'),
+            h('dd', { class: 'mt-1' },
+              h('span', { class: 'num' }, localRatio(stats))
+            )
+          ),
+          h('div', {},
+            h('dt', { class: 'eyebrow' }, '24h'),
+            h('dd', { class: 'mt-1' },
+              h('span', {
+                class: 'num' + (delta24 === null || delta24 === 0 ? ' text-muted' : ''),
+              }, signedBytes(delta24))
+            )
+          )
+        ),
+        h('div', { class: 'mt-auto pt-4' },
+          sparkline(bufferHistory(tracker)),
+          h('p', { class: 'hint mt-1 flex justify-between gap-2 text-xs' },
+            h('span', {}, 'Buffer, 7 days'),
+            h('span', {}, 'Tracking since ' + localDate(tracker.createdAt || tracker.lastSync))
           )
         )
       );
-      grid.appendChild(card);
+
+      section.appendChild(card);
     });
 
-    section.append(heading, grid);
+    const main = document.querySelector('main') || document.querySelector('#main') || document.body;
 
-    // The dashboard's native tracker cards are inside their own grid section.
-    // Put our custom tracker section immediately AFTER that section, not inside it.
+    // Add custom cards after native tracker cards in Sherlock's existing tracker grid.
     const nativeGrid = Array.from(main.querySelectorAll('section')).find((el) =>
       el !== section &&
       el.classList.contains('grid') &&
-      el.querySelector('a.card[href^="/trackers/"], a[href^="/trackers/"] .card')
+      el.querySelector('a[href^="/trackers/"] .card, a.card[href^="/trackers/"]')
     );
-    const trackerCard = main.querySelector('a.card[href^="/trackers/"], a[href^="/trackers/"] .card');
-    const nativeSection = nativeGrid || (trackerCard && trackerCard.closest('section'));
+    const trackerCards = Array.from(main.querySelectorAll('a.card[href^="/trackers/"]'));
+    const nativeSection = nativeGrid || (trackerCards[0] && trackerCards[0].parentElement);
 
-    if (nativeSection && nativeSection.parentNode) {
-      nativeSection.insertAdjacentElement('afterend', section);
-      return;
+    if (nativeSection && nativeSection.classList.contains('grid')) {
+      nativeSection.append(...Array.from(section.children));
+      section.remove();
+      nativeSection.id = nativeSection.id || 'sherlock-tracker-card-grid';
+    } else {
+      const dashboardHeading = Array.from(main.querySelectorAll('h1')).find((el) =>
+        /dashboard/i.test(el.textContent || '')
+      );
+      const headingRow = dashboardHeading && dashboardHeading.parentElement && dashboardHeading.parentElement.parentElement;
+      if (headingRow && headingRow.parentNode) headingRow.insertAdjacentElement('afterend', section);
+      else main.appendChild(section);
     }
-
-    // Fallback for dashboard layouts without native tracker cards.
-    const dashboardHeading = Array.from(main.querySelectorAll('h1')).find((el) =>
-      /dashboard/i.test(el.textContent || '')
-    );
-    const headingRow = dashboardHeading && dashboardHeading.parentElement && dashboardHeading.parentElement.parentElement;
-    if (headingRow && headingRow.parentNode) headingRow.insertAdjacentElement('afterend', section);
-    else main.appendChild(section);
   }
 
   /* ======================================================================
