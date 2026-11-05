@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.2
+// @version      1.4.3
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -381,10 +381,36 @@
     return out;
   }
 
+  // IPTorrents mirror hostnames shared in the tracker announcement.
+  // octopus.town is wildcarded: anyName.octopus.town is a supported mirror.
+  const IPTORRENTS_MIRROR_HOSTS = new Set([
+    'ipt.cool',
+    'ipt.world',
+    'ipt.lol',
+    'ip.findnemo.net',
+    'ip.getcrazy.me',
+    'ip.venom.global',
+    'ip.workisboring.net',
+  ]);
+
+  function isIptorrentsHost(value) {
+    const host = String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .split(/[/:?#]/, 1)[0]
+      .replace(/^www\./, '')
+      .replace(/\.$/, '');
+    return host === 'iptorrents.com' ||
+      host.endsWith('.iptorrents.com') ||
+      IPTORRENTS_MIRROR_HOSTS.has(host) ||
+      (host.endsWith('.octopus.town') && host !== 'octopus.town');
+  }
+
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, isIptorrentsHost };
     }
     return;
   }
@@ -393,7 +419,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.2';
+  const VERSION = '1.4.3';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -816,13 +842,14 @@
   }
 
   function trackerApiType(tracker) {
-    let hostname = String(tracker && tracker.host || '').toLowerCase().replace(/^www\\./, '');
+    let hostname = String(tracker && tracker.host || '');
     try {
-      if (tracker && tracker.origin) hostname = new URL(tracker.origin).hostname.toLowerCase().replace(/^www\\./, '');
+      if (tracker && tracker.origin) hostname = new URL(tracker.origin).hostname;
     } catch (e) { /* fall back to the saved host */ }
+    hostname = String(hostname).toLowerCase().replace(/^www\./, '');
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
-    if (hostname === 'iptorrents.com' || hostname.endsWith('.iptorrents.com')) return 'iptorrents';
+    if (isIptorrentsHost(hostname)) return 'iptorrents';
     return null;
   }
 
