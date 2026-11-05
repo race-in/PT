@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.8
+// @version      1.3.9
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -266,7 +266,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.8';
+  const VERSION = '1.3.9';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -1027,14 +1027,6 @@
     writeDashboardMetric(downloadedCard, totals.downloaded);
   }
 
-
-    writeDashboardMetric(bufferCard, totals.buffer);
-    writeDashboardMetric(uploadedCard, totals.uploaded);
-
-    const downloadedLabel = downloadedCard.querySelector('.eyebrow');
-    if (downloadedLabel) downloadedLabel.textContent = 'Total Downloaded';
-    writeDashboardMetric(downloadedCard, totals.downloaded);
-  }
 
   function localRatio(stats) {
     if (stats.ratio !== null && stats.ratio !== undefined && Number.isFinite(Number(stats.ratio))) return Number(stats.ratio).toFixed(2);
