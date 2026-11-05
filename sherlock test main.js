@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.3
+// @version      1.4.4
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -410,7 +410,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, isIptorrentsHost };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, isIptorrentsHost, normalizeIptorrentsTrackerStore };
     }
     return;
   }
@@ -419,25 +419,93 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.3';
+  const VERSION = '1.4.4';
   const DEFAULT_URL = '';
+  function normalizeIptorrentsTrackerStore(all) {
+    const entries = Object.entries(all || {}).filter(([key, tracker]) =>
+      tracker && (
+        isIptorrentsHost(key) ||
+        isIptorrentsHost(tracker.host) ||
+        isIptorrentsHost(tracker.origin)
+      )
+    );
+    if (!entries.length) return { trackers: all || {}, changed: false };
+
+    const bySync = entries.slice().sort((a, b) =>
+      Number(b[1].lastSync || 0) - Number(a[1].lastSync || 0)
+    );
+    const byVisit = entries.slice().sort((a, b) =>
+      Number(b[1].lastSeenAt || b[1].lastSync || 0) -
+      Number(a[1].lastSeenAt || a[1].lastSync || 0)
+    );
+    const freshest = Object.assign({}, bySync[0][1]);
+    const mostRecent = byVisit[0][1];
+    const points = new Map();
+
+    entries.forEach(([, tracker]) => {
+      (Array.isArray(tracker.history) ? tracker.history : []).forEach((point) => {
+        const at = Number(point && point.at);
+        if (Number.isFinite(at) && at > 0 && Number.isFinite(Number(point.buffer))) {
+          points.set(at, point);
+        }
+      });
+    });
+
+    const history = Array.from(points.values())
+      .sort((a, b) => Number(a.at) - Number(b.at))
+      .slice(-240);
+    const created = entries
+      .map(([, tracker]) => Number(tracker.createdAt || 0))
+      .filter((value) => value > 0 && Number.isFinite(value));
+
+    freshest.host = 'iptorrents.com';
+    freshest.origin = mostRecent.origin || freshest.origin || 'https://iptorrents.com';
+    freshest.lastSeenAt = Math.max(...entries.map(([, tracker]) =>
+      Number(tracker.lastSeenAt || tracker.lastSync || 0)
+    ));
+    freshest.history = history;
+    if (created.length) freshest.createdAt = Math.min(...created);
+
+    const normalized = Object.assign({}, all);
+    entries.forEach(([key]) => {
+      if (key !== 'iptorrents.com') delete normalized[key];
+    });
+    normalized['iptorrents.com'] = freshest;
+
+    const changed = entries.length !== 1 ||
+      entries[0][0] !== 'iptorrents.com' ||
+      entries[0][1].host !== 'iptorrents.com';
+    return { trackers: normalized, changed };
+  }
+
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
     set url(v) { GM_setValue('sherlock.url', String(v).trim().replace(/\/+$/, '')); },
     get interval() { return Math.max(15, Number(GM_getValue('sherlock.interval', 60)) || 60); },
     set interval(v) { GM_setValue('sherlock.interval', Math.max(15, Number(v) || 60)); },
-    get trackers() { try { return JSON.parse(GM_getValue('sherlock.trackers', '{}')) || {}; } catch (e) { return {}; } },
+    get trackers() {
+      let all;
+      try { all = JSON.parse(GM_getValue('sherlock.trackers', '{}')) || {}; }
+      catch (e) { all = {}; }
+      const result = normalizeIptorrentsTrackerStore(all);
+      if (result.changed) GM_setValue('sherlock.trackers', JSON.stringify(result.trackers));
+      return result.trackers;
+    },
     set trackers(v) { GM_setValue('sherlock.trackers', JSON.stringify(v)); },
     get dismissed() { try { return JSON.parse(GM_getValue('sherlock.dismissed', '{}')) || {}; } catch (e) { return {}; } },
     set dismissed(v) { GM_setValue('sherlock.dismissed', JSON.stringify(v)); },
   };
 
-  const HOST = location.hostname.toLowerCase().replace(/^www\./, '');
+  const PAGE_HOST = location.hostname.toLowerCase().replace(/^www\./, '');
+  // All IPTorrents mirrors represent one tracker/account in Sherlock totals.
+  const HOST = isIptorrentsHost(PAGE_HOST) ? 'iptorrents.com' : PAGE_HOST;
   const sessionSkipped = new Set();
 
   function saveTracker(t) {
     const all = store.trackers;
-    all[t.host] = t;
+    const key = isIptorrentsHost(t.host) || isIptorrentsHost(t.origin) ? 'iptorrents.com' : t.host;
+    t.host = key;
+    all[key] = t;
     store.trackers = all;
   }
 
@@ -1768,8 +1836,9 @@
   }
 
   async function autoAddTracker() {
-    const cooldownKey = 'sherlock.autoadd.attempt.' + HOST;
-    const lockKey = 'sherlock.autoadd.lock.' + HOST;
+    const attemptHost = PAGE_HOST;
+    const cooldownKey = 'sherlock.autoadd.attempt.' + attemptHost;
+    const lockKey = 'sherlock.autoadd.lock.' + attemptHost;
     const now = Date.now();
     if (now - Number(GM_getValue(cooldownKey, 0)) < 30 * 60 * 1000) return;
     if (now - Number(GM_getValue(lockKey, 0)) < 60000) return;
@@ -1789,6 +1858,7 @@
       logo: null,
       lastSync: 0,
       lastAttempt: now,
+      lastSeenAt: now,
       stats: {},
       enabled: true,
       history: [],
@@ -1878,6 +1948,13 @@
 
     const tracker = store.trackers[HOST];
     if (tracker) {
+      // Remember the latest working mirror so dashboard remote sync uses it.
+      if (trackerApiType({ host: HOST, origin: location.origin }) === 'iptorrents') {
+        tracker.host = 'iptorrents.com';
+        tracker.origin = location.origin;
+        tracker.lastSeenAt = Date.now();
+        saveTracker(tracker);
+      }
       const due = Date.now() - (tracker.lastSync || 0) > store.interval * 60000 && Date.now() - (tracker.lastAttempt || 0) > 10 * 60000;
       if (tracker.enabled !== false && due) syncTracker(tracker, {});
       return;
