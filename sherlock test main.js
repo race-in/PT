@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.5.2
+// @version      1.5.3
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -644,10 +644,27 @@
       (host.endsWith('.octopus.town') && host !== 'octopus.town');
   }
 
+  function isDigitalCoreHost(value) {
+    const host = String(value || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0]
+      .replace(/^www\./, '').replace(/\.$/, '');
+    return host === 'digitalcore.club' || host.endsWith('.digitalcore.club');
+  }
+
+  function trackerNameForNewTracker(title, host, origin, doc) {
+    const identity = { host, origin };
+    if (isDigitalCoreHost(host) || isDigitalCoreHost(origin)) return 'DigitalCore';
+    if (isTranceTrafficTracker(identity, doc)) return 'TranceTraffic';
+    if (isMyAnonamouseTracker(identity, doc)) return 'MyAnonamouse';
+    if (isFileListTracker(identity, doc)) return 'FileList';
+    if (isCinemageddonTracker(identity, doc)) return 'Cinemageddon';
+    return guessName(title, host);
+  }
+
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -656,7 +673,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.5.2';
+  const VERSION = '1.5.3';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -743,6 +760,10 @@
     const all = store.trackers;
     const key = isIptorrentsHost(t.host) || isIptorrentsHost(t.origin) ? 'iptorrents.com' : t.host;
     t.host = key;
+    if (isDigitalCoreHost(t.host) || isDigitalCoreHost(t.origin)) {
+      t.name = 'DigitalCore';
+      t.shortName = shortNameOf('DigitalCore');
+    }
     all[key] = t;
     store.trackers = all;
   }
@@ -1806,7 +1827,7 @@
 
   async function openTrackerPanel(existing) {
     const tracker = existing || {
-      host: HOST, origin: location.origin, name: isTranceTrafficDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'trancetraffic' ? 'TranceTraffic' : (isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)))), shortName: '', enabled: true, kind: 'auto',
+      host: HOST, origin: location.origin, name: trackerNameForNewTracker(document.title, HOST, location.origin, document), shortName: '', enabled: true, kind: 'auto',
       profileUrl: null, username: '', userId: '', si: false, logo: null, lastSync: 0, stats: {},
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
@@ -2506,7 +2527,7 @@
     const tracker = {
       host: HOST,
       origin: location.origin,
-      name: isTranceTrafficDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'trancetraffic' ? 'TranceTraffic' : (isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)))),
+      name: trackerNameForNewTracker(document.title, HOST, location.origin, document),
       shortName: '',
       kind: 'auto',
       profileUrl: null,
@@ -2609,6 +2630,13 @@
 
     const tracker = store.trackers[HOST];
     if (tracker) {
+      // Keep DigitalCore's visible tracker name clean, including entries added by older versions.
+      if ((isDigitalCoreHost(tracker.host) || isDigitalCoreHost(tracker.origin)) &&
+          (tracker.name !== 'DigitalCore' || tracker.shortName !== shortNameOf('DigitalCore'))) {
+        tracker.name = 'DigitalCore';
+        tracker.shortName = shortNameOf('DigitalCore');
+        saveTracker(tracker);
+      }
       // Remember the latest working mirror so dashboard remote sync uses it.
       if (trackerApiType({ host: HOST, origin: location.origin }) === 'iptorrents') {
         tracker.host = 'iptorrents.com';
