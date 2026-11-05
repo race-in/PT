@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.8
+// @version      1.4.9
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -354,6 +354,70 @@
   }
 
   // IPTorrents displays decimal GB/TB units in its account stats bar.
+  function isFileListHost(value) {
+    const host = String(value || '').trim().toLowerCase()
+      .replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0]
+      .replace(/^www\./, '').replace(/\.$/, '');
+    return host === 'filelist.io' || host.endsWith('.filelist.io');
+  }
+
+  function isFileListDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    const statusUser = doc.querySelector('.statusbar a[href*="userdetails.php?id="]');
+    if (!statusUser) return false;
+    const title = String(doc.title || '');
+    const footerBrand = doc.querySelector('#copyright a[href*="filelist.io"], #copyrightInner a[href*="filelist.io"]');
+    const rss = doc.querySelector('link[rel="alternate"][title="Latest Torrents"][href*="filelist.io"]');
+    return /filelist/i.test(title) || !!footerBrand || !!rss;
+  }
+
+  function isFileListTracker(tracker, doc) {
+    tracker = tracker || {};
+    return tracker.kind === 'filelist' ||
+      /^filelist(?:\s|$)/i.test(String(tracker.name || '').trim()) ||
+      isFileListHost(tracker.host) ||
+      isFileListHost(tracker.origin) ||
+      isFileListDocument(doc);
+  }
+
+  function mapFileListProfileRows(rows, statusText, seedText) {
+    const stats = resolveStats(rows || [], false);
+    const header = String(statusText || '').replace(/\s+/g, ' ').trim();
+
+    if (stats.uploaded === undefined) {
+      const uploaded = header.match(/\bUploaded\s*:?\s*(\d[\d.,]*\s*[KMGTPE]?i?B)\b/i);
+      if (uploaded) stats.uploaded = parseBytes(uploaded[1], false);
+    }
+    if (stats.downloaded === undefined) {
+      const downloaded = header.match(/\bDownloaded\s*:?\s*(\d[\d.,]*\s*[KMGTPE]?i?B)\b/i);
+      if (downloaded) stats.downloaded = parseBytes(downloaded[1], false);
+    }
+    if (stats.ratio === undefined) {
+      const ratio = header.match(/\bRatio\s*:?\s*(\d[\d.,]+)/i);
+      if (ratio) {
+        const parsed = parseRatio(ratio[1]);
+        if (parsed && !parsed.infinite) stats.ratio = parsed.value;
+      }
+    }
+    if (stats.user_class === undefined) {
+      const statusClass = header.match(/\[([^\]]{2,40})\]/);
+      if (statusClass) stats.user_class = statusClass[1].trim();
+    }
+
+    const seed = String(seedText || '');
+    if (stats.seeding === undefined) {
+      const count = seed.match(/\bSeeding\s+([\d,]+)/i);
+      if (count) stats.seeding = parseCount(count[1]);
+    }
+    if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) &&
+        stats.ratio === undefined) {
+      stats.ratio = stats.downloaded > 0
+        ? stats.uploaded / stats.downloaded
+        : (stats.uploaded > 0 ? Infinity : null);
+    }
+    return stats;
+  }
+
   function isCinemageddonHost(value) {
     const host = String(value || '').trim().toLowerCase()
       .replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0]
@@ -491,7 +555,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows };
     }
     return;
   }
@@ -500,7 +564,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.8';
+  const VERSION = '1.4.9';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -950,6 +1014,104 @@
     };
   }
 
+  function parseFileListProfile(doc, profileUrl, origin, si) {
+    const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
+    if (doc.querySelector('input[type="password"]') ||
+        /\/login\.php(?:[?#"']|$)|name=["']login["']/.test(html)) {
+      throw new ReadError('FileList login session is not available. Sign in and refresh.');
+    }
+
+    const statusbar = doc.querySelector('.statusbar');
+    if (!statusbar) throw new ReadError('FileList status bar was not found. The page may not be authenticated or its layout changed.');
+    const userLink = statusbar.querySelector('a[href*="userdetails.php?id="]');
+    if (!userLink) throw new ReadError('FileList could not find the logged-in account profile link.');
+
+    let userId = '';
+    let username = '';
+    try {
+      const link = new URL(userLink.getAttribute('href'), origin);
+      if (link.origin === origin && /\/userdetails\.php$/i.test(link.pathname)) {
+        userId = link.searchParams.get('id') || '';
+      }
+    } catch (e) { /* validate below */ }
+    username = (userLink.textContent || '').replace(/\s+/g, ' ').trim();
+
+    const rows = [];
+    for (const row of doc.querySelectorAll('table tr')) {
+      const cells = Array.from(row.children).filter((cell) => cell.tagName === 'TD');
+      if (cells.length < 2) continue;
+      const label = (cells[0].textContent || '').replace(/\s+/g, ' ').trim();
+      const value = (cells[1].textContent || '').replace(/\s+/g, ' ').trim();
+      if (label && value) rows.push({ label, value });
+    }
+
+    const seedRow = rows.find((row) => /^seed bonus$/i.test(row.label));
+    const statusText = (statusbar.textContent || '').replace(/\s+/g, ' ').trim();
+    const stats = mapFileListProfileRows(rows, statusText, seedRow && seedRow.value);
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('FileList could not extract both Uploaded and Downloaded values from the profile.');
+    }
+
+    const profile = new URL(profileUrl, origin);
+    const profileId = profile.searchParams.get('id') || '';
+    if (!/^\d+$/.test(userId) || !/^\d+$/.test(profileId) || userId !== profileId) {
+      throw new ReadError('FileList returned a profile that does not match the logged-in account.');
+    }
+
+    return {
+      kind: 'filelist',
+      userId,
+      username,
+      profileUrl: profile.href,
+      stats,
+    };
+  }
+
+  async function readFileList(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
+
+    let homeDocument = sourceDocument;
+    if (!homeDocument || !homeDocument.querySelector('.statusbar a[href*="userdetails.php?id="]')) {
+      const result = await request(new URL('/index.php', origin).href, 'text/html');
+      homeDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+
+    const statusLink = homeDocument.querySelector('.statusbar a[href*="userdetails.php?id="]');
+    if (!statusLink) {
+      throw new ReadError('FileList could not find the signed-in user profile link. Sign in and retry.');
+    }
+
+    const profileUrl = new URL(statusLink.getAttribute('href'), origin);
+    if (profileUrl.origin !== origin || !/\/userdetails\.php$/i.test(profileUrl.pathname) ||
+        !/^\d+$/.test(profileUrl.searchParams.get('id') || '')) {
+      throw new ReadError('FileList returned an invalid user profile link.');
+    }
+
+    let profileDocument = null;
+    try {
+      const current = new URL(pageUrl, origin);
+      if (sourceDocument && current.origin === origin &&
+          /\/userdetails\.php$/i.test(current.pathname) &&
+          current.searchParams.get('id') === profileUrl.searchParams.get('id')) {
+        profileDocument = sourceDocument;
+      }
+    } catch (e) { /* fetch profile below */ }
+
+    if (!profileDocument) {
+      const result = await request(profileUrl.href, 'text/html');
+      if (/\/login\.php/i.test(result.url || '')) {
+        throw new ReadError('FileList session expired. Sign in again and refresh.');
+      }
+      profileDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+
+    return parseFileListProfile(profileDocument, profileUrl.href, origin, !!tracker.si);
+  }
+
   function parseCinemageddonProfile(doc, profileUrl, origin, si) {
     const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
     if (doc.querySelector('input[type="password"]') ||
@@ -1127,6 +1289,7 @@
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
+    if (isFileListTracker(tracker)) return 'filelist';
     if (isCinemageddonTracker(tracker)) return 'cinemageddon';
     return null;
   }
@@ -1140,6 +1303,7 @@
     if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
     if (apiType === 'rartracker') return readRartracker(tracker, request);
     if (apiType === 'iptorrents') return readIptorrents(tracker, context);
+    if (apiType === 'filelist' || isFileListDocument(sourceDocument)) return readFileList(tracker, context);
     if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return readCinemageddon(tracker, context);
 
     const si = !!tracker.si;
@@ -1393,7 +1557,7 @@
 
   async function openTrackerPanel(existing) {
     const tracker = existing || {
-      host: HOST, origin: location.origin, name: isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST), shortName: '', enabled: true, kind: 'auto',
+      host: HOST, origin: location.origin, name: isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)), shortName: '', enabled: true, kind: 'auto',
       profileUrl: null, username: '', userId: '', si: false, logo: null, lastSync: 0, stats: {},
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
@@ -2008,6 +2172,15 @@
   }
 
   function looksLikeTracker() {
+    if (isFileListDocument(document)) {
+      if (document.querySelector('input[type="password"]')) return false;
+      const versionKey = 'sherlock.filelist.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
     if (isCinemageddonDocument(document)) {
       if (document.querySelector('input[type="password"]')) return false;
       // Reset a stale failed auto-detection cooldown once when this parser version is installed.
@@ -2069,7 +2242,7 @@
     const tracker = {
       host: HOST,
       origin: location.origin,
-      name: isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST),
+      name: isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)),
       shortName: '',
       kind: 'auto',
       profileUrl: null,
