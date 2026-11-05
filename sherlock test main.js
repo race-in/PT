@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.12
+// @version      1.3.13
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -218,17 +218,43 @@
     return { uploaded, downloaded, buffer };
   }
 
-  // Combine native dashboard totals with browser-local custom tracker totals.
-  function calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers, nativeDownloadedOverride) {
+  // Match Sherlock's Snapshot.buffer() calculation for browser-local custom trackers.
+  // "required_ratio" uses floor(uploaded / required_ratio) - downloaded; a missing
+  // or non-positive required ratio falls back to the standard 1.0 basis.
+  function customTrackerBuffer(stats, bufferBasis) {
+    const uploaded = Number(stats && stats.uploaded);
+    const downloaded = Number(stats && stats.downloaded);
+    if (!Number.isFinite(uploaded) || !Number.isFinite(downloaded)) return null;
+
+    if (bufferBasis === 'required_ratio') {
+      const requiredRatio = Number(stats.required_ratio);
+      const divisor = Number.isFinite(requiredRatio) && requiredRatio > 0 ? requiredRatio : 1;
+      return Math.floor(uploaded / divisor) - downloaded;
+    }
+
+    return uploaded - downloaded;
+  }
+
+  // Add browser-local custom tracker totals to Sherlock's authoritative native summary values.
+  function calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers, nativeDownloadedOverride, bufferBasis) {
     const baseBuffer = Number(nativeBuffer);
     const baseUploaded = Number(nativeUploaded);
     if (!Number.isFinite(baseBuffer) || !Number.isFinite(baseUploaded)) return null;
 
     let uploaded = baseUploaded;
-    let downloaded = Number.isFinite(Number(nativeDownloadedOverride))
-      ? Number(nativeDownloadedOverride)
-      : baseUploaded - baseBuffer;
+    let downloaded = nativeDownloadedOverride === null || nativeDownloadedOverride === undefined
+      ? null
+      : Number(nativeDownloadedOverride);
+    if (!Number.isFinite(downloaded)) downloaded = null;
     let buffer = baseBuffer;
+
+    // With the normal 1.0 basis, native downloaded = uploaded - buffer.
+    // In required-ratio mode the native buffer is adjusted per tracker, so that
+    // subtraction cannot recover raw downloaded bytes from the aggregate totals.
+    if (downloaded === null && bufferBasis !== 'required_ratio') {
+      downloaded = baseUploaded - baseBuffer;
+      if (!Number.isFinite(downloaded) || downloaded < 0) downloaded = null;
+    }
 
     for (const tracker of customTrackers || []) {
       const stats = tracker && tracker.stats || {};
@@ -242,9 +268,12 @@
       if (!Number.isFinite(trackerUploaded) || !Number.isFinite(trackerDownloaded) ||
           trackerUploaded < 0 || trackerDownloaded < 0) continue;
 
+      const trackerBuffer = customTrackerBuffer(stats, bufferBasis || 'one_to_one');
+      if (trackerBuffer === null) continue;
+
       uploaded += trackerUploaded;
-      downloaded += trackerDownloaded;
-      buffer += trackerUploaded - trackerDownloaded;
+      if (downloaded !== null) downloaded += trackerDownloaded;
+      buffer += trackerBuffer;
     }
 
     return {
@@ -257,7 +286,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, calculateDashboardTotals, calculateNativeTrackerTotals };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals };
     }
     return;
   }
@@ -266,7 +295,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.12';
+  const VERSION = '1.3.13';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -752,6 +781,13 @@
         const si = refs.si.checked;
         const stats = {};
         for (const [key, , kind] of FIELDS) { const v = readField(kind, refs['f_' + key].value, si); if (v !== null) stats[key] = v; }
+        // required_ratio is detected by the tracker readers even though it is not a visible edit field.
+        // Preserve it when saving the panel so required-ratio buffer calculations keep working.
+        const detectedRequiredRatio = state.stats && state.stats.required_ratio;
+        if (detectedRequiredRatio !== null && detectedRequiredRatio !== undefined &&
+            Number.isFinite(Number(detectedRequiredRatio)) && Number(detectedRequiredRatio) >= 0) {
+          stats.required_ratio = Number(detectedRequiredRatio);
+        }
         if (stats.uploaded == null || stats.downloaded == null) return showNote('Uploaded and downloaded are needed, for example 1.5 TiB.', 'err');
         const username = refs.username.value.trim();
         if (!username) return showNote('Enter your username on this tracker.', 'err');
@@ -978,53 +1014,69 @@
 
   function updateDashboardTotals(customTrackers) {
     const main = document.querySelector('main') || document.querySelector('#main') || document.body;
+    const bufferLabelPattern = /^total buffer(?: at required ratio)?$/;
     const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
       const cards = Array.from(section.children).filter((child) => child.classList.contains('card'));
       const labels = cards.map((card) => {
         const label = card.querySelector('.eyebrow');
         return (label && label.textContent || '').trim().toLowerCase();
       });
-      return labels.includes('total buffer') &&
+      return labels.some((label) => bufferLabelPattern.test(label)) &&
         labels.includes('total uploaded') &&
         (labels.includes('buffer, last 24 hours') || labels.includes('total downloaded'));
     });
     if (!summarySection) return;
 
     const cards = Array.from(summarySection.children).filter((child) => child.classList.contains('card'));
-    const findCard = (labelText) => cards.find((card) => {
-      const label = card.querySelector('.eyebrow');
-      return (label && label.textContent || '').trim().toLowerCase() === labelText;
-    });
+    const labelOf = (card) => {
+      const label = card && card.querySelector('.eyebrow');
+      return (label && label.textContent || '').trim().toLowerCase();
+    };
+    const findCard = (labelText) => cards.find((card) => labelOf(card) === labelText);
 
-    const bufferCard = findCard('total buffer');
+    const bufferCard = cards.find((card) => bufferLabelPattern.test(labelOf(card)));
     const uploadedCard = findCard('total uploaded');
     const downloadedCard = findCard('total downloaded') || findCard('buffer, last 24 hours');
     if (!bufferCard || !uploadedCard || !downloadedCard) return;
 
-    let nativeBuffer = readNativeMetricBytes(bufferCard);
-    let nativeUploaded = readNativeMetricBytes(uploadedCard);
+    const bufferBasis = /at required ratio$/.test(labelOf(bufferCard)) ? 'required_ratio' : 'one_to_one';
+    const nativeBuffer = readNativeMetricBytes(bufferCard);
+    const nativeUploaded = readNativeMetricBytes(uploadedCard);
     if (nativeBuffer === null || nativeUploaded === null) return;
 
-    let nativeDownloaded = nativeUploaded - nativeBuffer;
-    // If native summary values are inconsistent (e.g. they imply negative downloads),
-    // reconstruct the native totals from each built-in tracker card's Buffer and Ratio.
-    if (nativeDownloaded < 0) {
+    // Raw native downloaded totals can be derived from the summary only with the 1.0 basis.
+    // In required-ratio mode, the native Buffer is adjusted per tracker; don't infer downloads
+    // from Uploaded - Buffer or from the displayed (rounded) share ratios.
+    let nativeDownloaded = bufferBasis === 'required_ratio' ? null : nativeUploaded - nativeBuffer;
+    if (nativeDownloaded !== null && nativeDownloaded < 0) {
       const recovered = readNativeTrackerRows(main);
-      if (!recovered) return;
-      // Keep Sherlock's own native Total Buffer and Total Uploaded values intact.
-      // Use the tracker-card ratios only to recover the native downloaded baseline.
-      nativeDownloaded = recovered.downloaded;
+      nativeDownloaded = recovered ? recovered.downloaded : null;
     }
 
-    const totals = calculateDashboardTotals(nativeBuffer, nativeUploaded, customTrackers, nativeDownloaded);
+    const totals = calculateDashboardTotals(
+      nativeBuffer,
+      nativeUploaded,
+      customTrackers,
+      nativeDownloaded,
+      bufferBasis
+    );
     if (!totals) return;
 
+    // These two totals stay anchored to Sherlock's own exact native snapshot sums.
     writeDashboardMetric(bufferCard, totals.buffer);
     writeDashboardMetric(uploadedCard, totals.uploaded);
 
     const downloadedLabel = downloadedCard.querySelector('.eyebrow');
     if (downloadedLabel) downloadedLabel.textContent = 'Total Downloaded';
-    writeDashboardMetric(downloadedCard, totals.downloaded);
+    if (totals.downloaded === null) {
+      const value = downloadedCard.querySelector('.num');
+      if (value) {
+        value.textContent = '—';
+        value.removeAttribute('title');
+      }
+    } else {
+      writeDashboardMetric(downloadedCard, totals.downloaded);
+    }
 
     // Match Total Uploaded's exact text sizing and colour.
     // The old 24-hour value had "text-muted", which should not apply to Total Downloaded.
