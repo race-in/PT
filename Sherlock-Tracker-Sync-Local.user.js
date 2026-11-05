@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.3.3
+// @version      1.3.4
 // @description  Adds unsupported trackers to your Sherlock dashboard locally in this browser; no server API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -183,7 +183,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.3.3';
+  const VERSION = '1.3.4';
   const DEFAULT_URL = '';
   const store = {
     get url() { return String(GM_getValue('sherlock.url', DEFAULT_URL) || DEFAULT_URL).replace(/\/+$/, ''); },
@@ -866,7 +866,7 @@
   }
 
   function renderLocalDashboard() {
-    // Remove previously injected custom cards/section, without touching native Sherlock cards.
+    // Remove only custom content from a previous render. Native Sherlock cards remain untouched.
     const previous = document.getElementById('sherlock-local-trackers');
     if (previous) previous.remove();
     document.querySelectorAll('[data-sherlock-custom-host]').forEach((el) => el.remove());
@@ -876,12 +876,15 @@
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (!trackers.length) return;
 
-    // Preserve Sherlock's original tracker-card layout and styling.
+    // Keep the same card design used by Sherlock's native tracker cards,
+    // but put custom trackers in their own section immediately below them.
     const section = h('section', {
       id: 'sherlock-local-trackers',
-      class: 'mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3',
+      class: 'mt-6',
       'aria-label': 'Custom trackers',
     });
+    const heading = h('h2', { class: 'eyebrow mb-3' }, 'Custom Trackers');
+    const grid = h('div', { class: 'grid gap-3 sm:grid-cols-2 lg:grid-cols-3' });
 
     trackers.forEach((tracker) => {
       const stats = tracker.stats || {};
@@ -969,25 +972,26 @@
         )
       );
 
-      section.appendChild(card);
+      grid.appendChild(card);
     });
+
+    section.append(heading, grid);
 
     const main = document.querySelector('main') || document.querySelector('#main') || document.body;
 
-    // Add custom cards after native tracker cards in Sherlock's existing tracker grid.
+    // Find Sherlock's existing tracker-card section and place the custom section after it.
     const nativeGrid = Array.from(main.querySelectorAll('section')).find((el) =>
       el !== section &&
       el.classList.contains('grid') &&
       el.querySelector('a[href^="/trackers/"] .card, a.card[href^="/trackers/"]')
     );
     const trackerCards = Array.from(main.querySelectorAll('a.card[href^="/trackers/"]'));
-    const nativeSection = nativeGrid || (trackerCards[0] && trackerCards[0].parentElement);
+    const nativeSection = nativeGrid || (trackerCards[0] && trackerCards[0].closest('section'));
 
-    if (nativeSection && nativeSection.classList.contains('grid')) {
-      nativeSection.append(...Array.from(section.children));
-      section.remove();
-      nativeSection.id = nativeSection.id || 'sherlock-tracker-card-grid';
+    if (nativeSection && nativeSection.parentNode) {
+      nativeSection.insertAdjacentElement('afterend', section);
     } else {
+      // Fallback for dashboard variants that do not render native tracker cards.
       const dashboardHeading = Array.from(main.querySelectorAll('h1')).find((el) =>
         /dashboard/i.test(el.textContent || '')
       );
