@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.4.9
+// @version      1.5.0
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -354,6 +354,41 @@
   }
 
   // IPTorrents displays decimal GB/TB units in its account stats bar.
+  function isMyAnonamouseHost(value) {
+    const host = String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0].replace(/^www\./, '').replace(/\.$/, '');
+    return host === 'myanonamouse.net' || host.endsWith('.myanonamouse.net');
+  }
+  function isMyAnonamouseDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    if (!doc.querySelector('#userStat') || !doc.querySelector('#mainmenu .mmUserStats a.myInfo[href*="/u/"]')) return false;
+    const title = String(doc.title || '');
+    const icon = doc.querySelector('link[rel~="icon"][href*="myanonamouse.net"], link[rel="apple-touch-icon"][href*="myanonamouse.net"]');
+    return /my anonamouse/i.test(title) || !!icon;
+  }
+  function isMyAnonamouseTracker(tracker, doc) {
+    tracker = tracker || {};
+    return tracker.kind === 'myanonamouse' ||
+      /^(my\s*)?anonamouse$/i.test(String(tracker.name || '').trim()) ||
+      isMyAnonamouseHost(tracker.host) || isMyAnonamouseHost(tracker.origin) ||
+      isMyAnonamouseDocument(doc);
+  }
+  function mapMyAnonamouseProfileRows(rows, headerText) {
+    const stats = resolveStats(rows || [], false);
+    const header = String(headerText || '').replace(/\s+/g, ' ').trim();
+    if (stats.ratio === undefined) {
+      const ratio = header.match(/\b(?:ratio|share ratio)\s*:?\s*(\d[\d.,]*)/i);
+      if (ratio) { const parsed = parseRatio(ratio[1]); if (parsed && !parsed.infinite) stats.ratio = parsed.value; }
+    }
+    if (stats.bonus_points === undefined) {
+      const bonus = header.match(/\bBonus\s*:\s*(\d[\d.,]*)/i);
+      if (bonus) stats.bonus_points = parseLocaleNumber(bonus[1]);
+    }
+    if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) && stats.ratio === undefined) {
+      stats.ratio = stats.downloaded > 0 ? stats.uploaded / stats.downloaded : (stats.uploaded > 0 ? Infinity : null);
+    }
+    return stats;
+  }
+
   function isFileListHost(value) {
     const host = String(value || '').trim().toLowerCase()
       .replace(/^https?:\/\//, '').split(/[/:?#]/, 1)[0]
@@ -555,7 +590,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, calculateNativeTrackerTotals, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows };
     }
     return;
   }
@@ -564,7 +599,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.4.9';
+  const VERSION = '1.5.0';
   const DEFAULT_URL = '';
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1014,6 +1049,78 @@
     };
   }
 
+  function parseMyAnonamouseProfile(doc, profileUrl, origin, si) {
+    const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
+    if (doc.querySelector('input[type="password"]') || /\/login(?:\.php)?(?:[?#"']|$)|name=["']login["']/.test(html)) {
+      throw new ReadError('MyAnonamouse login session is not available. Sign in and refresh.');
+    }
+    if (!doc.querySelector('#userStat')) throw new ReadError('MyAnonamouse account status header was not found. The page may not be authenticated or its layout changed.');
+    const uidInput = doc.querySelector('input[name="uid"]');
+    const pageProfile = new URL(profileUrl, origin);
+    const pathId = (pageProfile.pathname.match(/^\/u\/(\d+)\/?$/) || [])[1] || '';
+    const pageUid = uidInput ? String(uidInput.value || uidInput.getAttribute('value') || '').trim() : '';
+    const userId = pageUid || pathId;
+    if (!/^\d+$/.test(userId) || (pathId && pathId !== userId)) throw new ReadError('MyAnonamouse could not verify the signed-in profile ID.');
+
+    const rows = [];
+    for (const row of doc.querySelectorAll('#userDetailsMain table.fullWidth tr, #userDetailsMain table.umtjc tr, table.fullWidth.umtjc tr')) {
+      const cells = Array.from(row.children).filter((cell) => cell.tagName === 'TD');
+      if (cells.length < 2) continue;
+      const label = (cells[0].textContent || '').replace(/[\s\u00a0]+/g, ' ').trim();
+      const value = (cells[1].textContent || '').replace(/[\s\u00a0]+/g, ' ').trim();
+      if (label && value) rows.push({ label, value });
+    }
+    const header = doc.querySelector('#userStat');
+    const stats = mapMyAnonamouseProfileRows(rows, header && header.textContent);
+    if (stats.uploaded === undefined) { const value = doc.querySelector('#uploadedTD'); if (value) stats.uploaded = parseBytes(value.textContent, false); }
+    if (stats.downloaded === undefined) { const value = doc.querySelector('#downloadedTD'); if (value) stats.downloaded = parseBytes(value.textContent, false); }
+    if (stats.ratio === undefined) {
+      const value = doc.querySelector('#tmR');
+      if (value) { const parsed = parseRatio(value.textContent); if (parsed && !parsed.infinite) stats.ratio = parsed.value; }
+    }
+    if (stats.bonus_points === undefined) {
+      const value = doc.querySelector('#tmBP');
+      const match = value && (value.textContent || '').match(/Bonus\s*:\s*(\d[\d.,]*)/i);
+      if (match) stats.bonus_points = parseLocaleNumber(match[1]);
+    }
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      throw new ReadError('MyAnonamouse could not extract both Uploaded and Downloaded from your profile.');
+    }
+    const menuUser = doc.querySelector('#userMenu');
+    const titleMatch = String(doc.title || '').match(/^Details for\s+(.+?)\s*\|\s*My Anonamouse/i);
+    const username = (titleMatch && titleMatch[1]) || (menuUser && (menuUser.textContent || '').replace(/[\/↓\s]+$/g, '').trim()) || '';
+    return { kind: 'myanonamouse', userId, username, profileUrl: pageProfile.href, stats };
+  }
+
+  async function readMyAnonamouse(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || location.href;
+    let homeDocument = sourceDocument;
+    if (!homeDocument || !homeDocument.querySelector('#mainmenu .mmUserStats a.myInfo[href*="/u/"]')) {
+      const result = await request(new URL('/index.php', origin).href, 'text/html');
+      homeDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+    const profileLink = homeDocument.querySelector('#mainmenu .mmUserStats a.myInfo[href*="/u/"]');
+    if (!profileLink) throw new ReadError('MyAnonamouse could not find the logged-in My Info profile link. Sign in and retry.');
+    const profileUrl = new URL(profileLink.getAttribute('href'), origin);
+    if (profileUrl.origin !== origin || !/^\/u\/\d+\/?$/.test(profileUrl.pathname)) throw new ReadError('MyAnonamouse returned an invalid My Info profile link.');
+    let profileDocument = null;
+    try {
+      const current = new URL(pageUrl, origin);
+      if (sourceDocument && current.origin === origin && /^\/u\/\d+\/?$/.test(current.pathname) &&
+          current.pathname.replace(/\/$/, '') === profileUrl.pathname.replace(/\/$/, '')) profileDocument = sourceDocument;
+    } catch (e) { /* fetch profile below */ }
+    if (!profileDocument) {
+      const result = await request(profileUrl.href, 'text/html');
+      if (/\/login(?:\.php)?(?:[?#]|$)/i.test(result.url || '')) throw new ReadError('MyAnonamouse session expired. Sign in again and refresh.');
+      profileDocument = new DOMParser().parseFromString(result.text, 'text/html');
+    }
+    return parseMyAnonamouseProfile(profileDocument, profileUrl.href, origin, !!tracker.si);
+  }
+
   function parseFileListProfile(doc, profileUrl, origin, si) {
     const html = String(doc.documentElement && doc.documentElement.innerHTML || '').toLowerCase();
     if (doc.querySelector('input[type="password"]') ||
@@ -1289,6 +1396,7 @@
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
+    if (isMyAnonamouseTracker(tracker)) return 'myanonamouse';
     if (isFileListTracker(tracker)) return 'filelist';
     if (isCinemageddonTracker(tracker)) return 'cinemageddon';
     return null;
@@ -1303,6 +1411,7 @@
     if (apiType === 'digitalcore') return readDigitalCore(tracker, request);
     if (apiType === 'rartracker') return readRartracker(tracker, request);
     if (apiType === 'iptorrents') return readIptorrents(tracker, context);
+    if (apiType === 'myanonamouse' || isMyAnonamouseDocument(sourceDocument)) return readMyAnonamouse(tracker, context);
     if (apiType === 'filelist' || isFileListDocument(sourceDocument)) return readFileList(tracker, context);
     if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return readCinemageddon(tracker, context);
 
@@ -1557,7 +1666,7 @@
 
   async function openTrackerPanel(existing) {
     const tracker = existing || {
-      host: HOST, origin: location.origin, name: isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)), shortName: '', enabled: true, kind: 'auto',
+      host: HOST, origin: location.origin, name: isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST))), shortName: '', enabled: true, kind: 'auto',
       profileUrl: null, username: '', userId: '', si: false, logo: null, lastSync: 0, stats: {},
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
@@ -2172,6 +2281,15 @@
   }
 
   function looksLikeTracker() {
+    if (isMyAnonamouseDocument(document)) {
+      if (document.querySelector('input[type="password"]')) return false;
+      const versionKey = 'sherlock.myanonamouse.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
     if (isFileListDocument(document)) {
       if (document.querySelector('input[type="password"]')) return false;
       const versionKey = 'sherlock.filelist.autodetect.version.' + PAGE_HOST;
@@ -2242,7 +2360,7 @@
     const tracker = {
       host: HOST,
       origin: location.origin,
-      name: isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST)),
+      name: isMyAnonamouseDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'myanonamouse' ? 'MyAnonamouse' : (isFileListDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'filelist' ? 'FileList' : (isCinemageddonDocument(document) || trackerApiType({ host: HOST, origin: location.origin }) === 'cinemageddon' ? 'Cinemageddon' : guessName(document.title, HOST))),
       shortName: '',
       kind: 'auto',
       profileUrl: null,
