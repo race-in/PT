@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.3
+// @version      1.10.4
 // @description  Automatically discovers trackers and refreshes dashboard statistics.
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // ==/UserScript==
