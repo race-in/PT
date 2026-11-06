@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.1
+// @version      1.9.2
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2053,7 +2053,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, trackerDownloaded24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.1';
+  const VERSION = '1.9.2';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4257,18 +4257,6 @@
     };
   }
 
-  function trackerDownloaded24h(tracker) {
-    const traffic = trackerTraffic24h(tracker);
-    if (!traffic) return null;
-    return {
-      value: traffic.downloaded,
-      baselineAt: traffic.baselineAt,
-      currentAt: traffic.currentAt,
-      baseline: traffic.baselineDownloaded,
-      current: traffic.currentDownloaded,
-    };
-  }
-
   function sumTrackerTraffic24h(customTrackers) {
     const trackers = (Array.isArray(customTrackers) ? customTrackers : [])
       .filter((tracker) => tracker && tracker.enabled !== false);
@@ -4558,12 +4546,6 @@
     if (!timestamp) return '—';
     try { return new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
     catch (_) { return '—'; }
-  }
-
-  function signedBytes(value) {
-    if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
-    const n = Number(value);
-    return (n > 0 ? '+' : n < 0 ? '−' : '') + localBytes(Math.abs(n));
   }
 
   const nativeDownloadedCache = new Map();
@@ -4881,20 +4863,6 @@
             h('dt', { class: 'eyebrow' }, 'Downloaded'),
             h('dd', { class: 'mt-1' },
               h('span', { class: 'num' }, localBytes(downloaded))
-            )
-          ),
-          h('div', {},
-            h('dt', { class: 'eyebrow' }, '24h DL'),
-            h('dd', { class: 'mt-1' },
-              (() => {
-                const delta = trackerDownloaded24h(tracker);
-                const value = delta ? signedBytes(delta.value) : 'Collecting';
-                const title = delta
-                  ? 'Downloaded during the 24 hours before ' + new Date(delta.currentAt).toLocaleString() +
-                    '; baseline at ' + new Date(delta.baselineAt).toLocaleString()
-                  : 'A complete 24-hour history window is not available yet.';
-                return h('span', { class: 'num', title }, value);
-              })()
             )
           )
         )
