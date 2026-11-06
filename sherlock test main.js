@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.3
+// @version      1.6.4
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -714,7 +714,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.3';
+  const VERSION = '1.6.4';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2569,29 +2569,6 @@
     return (n > 0 ? '+' : n < 0 ? '−' : '') + localBytes(Math.abs(n));
   }
 
-  function bufferHistory(t, bufferBasis) {
-    const points = Array.isArray(t.history) ? t.history.filter((p) => Number.isFinite(Number(p.buffer))) : [];
-    if (points.length) return points.slice(-48).map((p) => Number(p.buffer));
-    const stats = t.stats || {};
-    const current = customTrackerBuffer(stats, bufferBasis || 'one_to_one');
-    const value = current === null ? 0 : current;
-    return [value, value, value, value, value, value, value, value];
-  }
-
-  function sparkline(values) {
-    const width = 100, height = 32, pad = 2;
-    const nums = values.filter(Number.isFinite);
-    if (!nums.length) return '';
-    const min = Math.min(...nums), max = Math.max(...nums), span = max - min || 1;
-    const coords = nums.map((v, i) => [nums.length === 1 ? width : (i / (nums.length - 1)) * width,
-      height - pad - ((v - min) / span) * (height - pad * 2)]);
-    const line = coords.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(2) + ',' + p[1].toFixed(2)).join(' ');
-    const area = line + ' L' + width + ',' + height + ' L0,' + height + ' Z';
-    return h('svg', { viewBox: '0 0 100 32', preserveAspectRatio: 'none', class: 'h-9 w-full text-accent', 'aria-hidden': 'true' },
-      h('path', { d: area, fill: 'currentColor', 'fill-opacity': '0.12' }),
-      h('path', { d: line, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'vector-effect': 'non-scaling-stroke' }));
-  }
-
   const nativeDownloadedCache = new Map();
   let nativeDownloadedCacheAt = 0;
   let nativeDownloadedFetchPromise = null;
@@ -2812,7 +2789,6 @@
       const uploaded = stats.uploaded === null || stats.uploaded === undefined ? null : Number(stats.uploaded);
       const downloaded = stats.downloaded === null || stats.downloaded === undefined ? null : Number(stats.downloaded);
       const buffer = customTrackerBuffer(stats, bufferBasis);
-      const history = Array.isArray(tracker.history) ? tracker.history : [];
 
       const logo = tracker.logo
         ? h('img', {
@@ -2864,13 +2840,6 @@
             h('dd', { class: 'mt-1' },
               h('span', { class: 'num' }, localBytes(downloaded))
             )
-          )
-        ),
-        h('div', { class: 'mt-auto pt-4' },
-          sparkline(bufferHistory(tracker, bufferBasis)),
-          h('p', { class: 'hint mt-1 flex justify-between gap-2 text-xs' },
-            h('span', {}, 'Buffer, 7 days'),
-            h('span', {}, 'Tracking since ' + localDate(tracker.createdAt || tracker.lastSync))
           )
         )
       );
