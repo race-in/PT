@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
-// @namespace    https://github.com/race-in/PT
-// @version      1.7.8
+// @namespace    __SHERLOCK_URL__
+// @version      1.7.9
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2039,7 +2039,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.8';
+  const VERSION = '1.7.9';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
