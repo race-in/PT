@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.0
+// @version      1.8.1
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1756,6 +1756,15 @@
 
   const SHERLOCK_DASHBOARD_BASE_URL = 'https://app.whatstatus.info';
 
+  function isSherlockDashboardPage() {
+    if (!isSherlockDashboardPage()) return false;
+    try {
+      return location.origin === new URL(SHERLOCK_DASHBOARD_BASE_URL).origin;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function sherlockDashboardUrl() {
     return SHERLOCK_DASHBOARD_BASE_URL.replace(/\/+$/, '') + '/dashboard';
   }
@@ -2039,7 +2048,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.0';
+  const VERSION = '1.8.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2311,10 +2320,10 @@
   // UNIT3D shows upload, download, ratio, bonus and seeding in a bar on every page: class names say which.
   function hasUnit3DStatsBar(doc) {
     if (!doc || typeof doc.querySelector !== 'function') return false;
-    // #userinfo_stats is ambiguous on its own. Known Gazelle/UNIT3D trackers are
-    // classified by trackerApiType() first; this legacy fallback is only for unknown sites.
+    // #userinfo_stats is shared by Gazelle/Luminance themes and is not UNIT3D proof.
+    // The fallback requires UNIT3D-specific ratio-bar markup.
     return !!doc.querySelector(
-      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"], #userinfo_stats'
+      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"]'
     );
   }
 
@@ -3351,7 +3360,6 @@
     // AnimeBytes may share generic #userinfo_stats markup with older UNIT3D
     // themes. Its host/identity exception must win before the DOM fallback.
     if (!isAnimeBytes && (apiType === 'unit3d' || (!apiType && hasUnit3DStatsBar(sourceDocument)))) return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
-    if (apiType === 'gazelle') return complete(readGazelle(request));
     if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
     if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
     if (apiType === 'iptorrents') return complete(readIptorrents(tracker, { origin, request, document: sourceDocument, pageUrl }));
@@ -3366,7 +3374,9 @@
     // authenticated profile reader after its non-stock /ajax.php endpoint fails.
     const kinds = isAnimeBytes
       ? (tracker.kind === 'profile' ? ['profile'] : ['gazelle', 'profile'])
-      : (tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile']);
+      : (apiType === 'gazelle'
+        ? ['gazelle', 'profile']
+        : (tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile']));
     let lastError;
     for (const kind of kinds) {
       try {
@@ -4394,6 +4404,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return true;
     }
@@ -4409,6 +4420,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return true;
     }
@@ -4418,6 +4430,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return true;
     }
@@ -4428,6 +4441,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return true;
     }
@@ -4449,6 +4463,7 @@
         if (GM_getValue(versionKey, '') !== VERSION) {
           GM_setValue(versionKey, VERSION);
           GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+          GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
           GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
         }
       }
@@ -4461,6 +4476,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return hasUnit3DStatsBar(document) && !document.querySelector('input[type="password"]');
     }
@@ -4470,6 +4486,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return !document.querySelector('input[type="password"]');
     }
@@ -4478,6 +4495,7 @@
       if (GM_getValue(versionKey, '') !== VERSION) {
         GM_setValue(versionKey, VERSION);
         GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       }
       return !document.querySelector('input[type="password"]');
     }
@@ -4490,7 +4508,7 @@
     if (menusRegistered) return;
     menusRegistered = true;
     GM_registerMenuCommand('Sherlock: Add this tracker', () => {
-      if (/\/dashboard\/?$/.test(location.pathname)) return toast('Open the tracker website first, then choose Add this tracker.', { kind: 'err' });
+      if (isSherlockDashboardPage()) return toast('Open the tracker website first, then choose Add this tracker.', { kind: 'err' });
       openTrackerPanel();
     });
     GM_registerMenuCommand('Sherlock: Sync current tracker now', () => {
@@ -4511,19 +4529,29 @@
       delete all[HOST]; store.trackers = all;
       // Permit immediate re-detection after explicit removal.
       GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
       GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
-      if (/\/dashboard\/?$/.test(location.pathname)) renderLocalDashboard();
+      if (isSherlockDashboardPage()) renderLocalDashboard();
       toast(trackerDisplayName(t) + ' removed from this browser.', { kind: 'ok' });
     });
     GM_registerMenuCommand('Sherlock: Settings', openSettings);
   }
 
+  function autoAddRetryDelay(failures) {
+    const count = Math.max(0, Math.floor(Number(failures) || 0));
+    return count > 0
+      ? Math.min(6 * 60 * 60 * 1000, 30 * 60 * 1000 * Math.pow(2, count - 1))
+      : 30 * 60 * 1000;
+  }
+
   async function autoAddTracker() {
     const attemptHost = PAGE_HOST;
     const cooldownKey = 'sherlock.autoadd.attempt.' + attemptHost;
+    const failuresKey = 'sherlock.autoadd.failures.' + attemptHost;
     const lockKey = 'sherlock.autoadd.lock.' + attemptHost;
     const now = Date.now();
-    if (now - Number(GM_getValue(cooldownKey, 0)) < 30 * 60 * 1000) return;
+    const failures = Math.max(0, Math.floor(Number(GM_getValue(failuresKey, 0)) || 0));
+    if (now - Number(GM_getValue(cooldownKey, 0)) < autoAddRetryDelay(failures)) return;
     if (now - Number(GM_getValue(lockKey, 0)) < 60000) return;
     GM_setValue(cooldownKey, now);
     GM_setValue(lockKey, now);
@@ -4563,13 +4591,14 @@
       tracker.shortName = shortNameOf(tracker.name);
       await push(tracker, { stats: data.stats });
       saveTracker(tracker);
+      GM_setValue(failuresKey, 0);
       toast(trackerDisplayName(tracker) + ' was detected and added automatically.', {
         kind: 'ok', ttl: 10000,
         actions: store.url ? [{ label: 'Open Sherlock dashboard', href: store.url + '/dashboard' }] : [],
       });
     } catch (e) {
-      // Failed reads can retry after five minutes instead of locking out auto-detection for 30 minutes.
-      GM_setValue(cooldownKey, Date.now() - 25 * 60000);
+      // Keep the failed-attempt timestamp and increase the next retry delay exponentially.
+      GM_setValue(failuresKey, Math.min(8, failures + 1));
       const message = e && e.message ? e.message : 'The tracker stats could not be read.';
       toast('Automatic detection could not add this tracker: ' + message, {
         kind: 'err', title: 'Sherlock auto-detection',
@@ -4585,7 +4614,7 @@
   let dashboardSyncRunning = false;
 
   async function dashboardAutoSync(force = false) {
-    if (dashboardSyncRunning || !/\/dashboard\/?$/.test(location.pathname)) return;
+    if (dashboardSyncRunning || !isSherlockDashboardPage()) return;
     dashboardSyncRunning = true;
     try {
       const now = Date.now();
@@ -4613,7 +4642,7 @@
     // Refresh immediately on dashboard entry, unless the tracker was attempted in the last 10 minutes.
     dashboardAutoSync(true);
     dashboardSyncTimer = window.setInterval(() => {
-      if (!/\/dashboard\/?$/.test(location.pathname)) {
+      if (!isSherlockDashboardPage()) {
         window.clearInterval(dashboardSyncTimer);
         dashboardSyncTimer = null;
         return;
@@ -4624,7 +4653,7 @@
 
   function main() {
     registerMenus();
-    const isDashboard = /\/dashboard\/?$/.test(location.pathname);
+    const isDashboard = isSherlockDashboardPage();
     if (isDashboard) {
       // The dashboard's own origin is the destination; no API calls are made to it.
       // Keep links pinned to the canonical public dashboard, not the VPS origin alias.
@@ -4657,10 +4686,10 @@
   document.addEventListener('turbo:render', main);
   window.addEventListener('pageshow', main);
   window.addEventListener('focus', () => {
-    if (/\/dashboard\/?$/.test(location.pathname)) dashboardAutoSync(true);
+    if (isSherlockDashboardPage()) dashboardAutoSync(true);
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && /\/dashboard\/?$/.test(location.pathname)) dashboardAutoSync(true);
+    if (document.visibilityState === 'visible' && isSherlockDashboardPage()) dashboardAutoSync(true);
   });
 
 })();
