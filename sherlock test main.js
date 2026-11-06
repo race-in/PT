@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.8
+// @version      1.9.9
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1709,9 +1709,12 @@
   function mapMTeamProfilePayload(payload) {
     if (!payload || typeof payload !== 'object') return null;
     const code = String(payload.code ?? '').toUpperCase();
-    const message = String(payload.message || '').toUpperCase();
+    const message = String(payload.message || '');
     if (code && !['0', '200', 'SUCCESS'].includes(code)) return null;
-    if (!code && message && message !== 'SUCCESS') return null;
+    if (!code && message && message.toUpperCase() !== 'SUCCESS') return null;
+
+    // Official Member schema: data.id, data.username, data.memberCount.
+    // MemberCount carries byte totals and the authoritative shareRate value.
     const user = payload.data && typeof payload.data === 'object' ? payload.data : null;
     const counts = user && (user.memberCount || user.member_count || user.count);
     if (!user || !counts || user.id === null || user.id === undefined) return null;
@@ -1720,6 +1723,14 @@
     const downloaded = apiByteNumber(counts.downloaded ?? user.downloaded);
     if (uploaded === null || downloaded === null) return null;
 
+    const shareRateRaw = counts.shareRate ?? counts.share_rate ??
+      counts.ratio ?? user.shareRate ?? user.share_rate ?? user.ratio;
+    const shareRate = apiOptionalNumber(shareRateRaw);
+    const ratio = shareRate !== null && shareRate >= 0 ? shareRate : apiRatio(uploaded, downloaded);
+    const className = user.title || user.roleName || user.role_name ||
+      user.className || user.class_name ||
+      (typeof user.role === 'string' ? user.role : null);
+
     return {
       kind: 'mteam',
       userId: String(user.id),
@@ -1727,9 +1738,9 @@
       stats: {
         uploaded,
         downloaded,
-        ratio: apiRatio(uploaded, downloaded),
+        ratio,
         bonus_points: apiOptionalNumber(counts.bonus ?? user.bonus),
-        user_class: user.roleName || user.role_name || user.role || null,
+        user_class: className === null || className === undefined ? null : String(className),
       },
     };
   }
@@ -2057,21 +2068,16 @@
       host === 'm-team.io' || host.endsWith('.m-team.io');
   }
 
-  function mTeamApiOrigin(siteOrigin, URLClass) {
-    const URLCtor = URLClass || URL;
-    const apiUrl = new URLCtor(siteOrigin);
-    const labels = apiUrl.hostname.split('.');
-    if (labels.length < 2 || !isMTeamHost(apiUrl.hostname)) {
-      throw new Error('Unsupported M-Team site address.');
-    }
-    // The bare canonical host has no site subdomain to replace.
-    if (labels.length === 2 && labels[0] === 'm-team') labels.unshift('api');
-    else labels[0] = 'api';
-    apiUrl.hostname = labels.join('.');
-    apiUrl.pathname = '/';
-    apiUrl.search = '';
-    apiUrl.hash = '';
-    return apiUrl.origin;
+  // Exact production API bases exposed by the M-Team frontend bootstrap HTML.
+  // Each base already includes /api; callers append only the endpoint path.
+  const MTEAM_API_BASES = Object.freeze([
+    'https://api.m-team.cc/api',
+    'https://api.m-team.io/api',
+    'https://api2.m-team.cc/api',
+  ]);
+
+  function mTeamApiBases() {
+    return MTEAM_API_BASES.slice();
   }
 
   function isBlutopiaHost(value) {
@@ -2253,7 +2259,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiOrigin, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2262,7 +2268,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.8';
+  const VERSION = '1.9.9';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3869,75 +3875,112 @@
   async function readMTeam(tracker, context) {
     context = context || {};
     const origin = context.origin || tracker.origin || ('https://' + tracker.host);
+    const siteOrigin = new URL(origin).origin;
     const token = String(tracker.apiKey || GM_getValue('sherlock.mteam.apiKey', '') || '').trim();
     if (!token) {
-      throw new ReadError('M-Team requires an API token. Open Control Panel → Lab on M-Team, create an access token, then paste it into the M-Team API Token field in Sherlock.');
+      throw new ReadError('M-Team requires an API token. Open Control Panel → Lab → Access Token, create a token, then paste it into the M-Team API Token field in Sherlock.');
+    }
+    if (typeof GM_xmlhttpRequest !== 'function') {
+      throw new ReadError('Userscript manager cross-origin requests are unavailable.');
     }
 
-    let apiUrl;
-    try {
-      apiUrl = mTeamApiOrigin(origin) + '/api/member/profile';
-    } catch (e) {
-      throw new ReadError('Could not determine the M-Team API host from ' + origin + '.');
-    }
+    // The bases are copied from the M-Team frontend's own _APIHOSTS bootstrap value.
+    // Each one already ends in /api, so append /member/profile only.
+    const endpoints = mTeamApiBases().map((base) => base + '/member/profile');
+    const errors = [];
 
-    const payload = await new Promise((resolve, reject) => {
-      if (typeof GM_xmlhttpRequest !== 'function') {
-        reject(new ReadError('Userscript manager cross-origin requests are unavailable.'));
-        return;
-      }
-      GM_xmlhttpRequest({
-        method: 'POST',
-        url: apiUrl,
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'x-api-key': token,
-          Origin: new URL(origin).origin,
-        },
-        data: '{}',
-        responseType: 'text',
-        timeout: 25000,
-        anonymous: false,
-        fetch: true,
-        cookiePartition: { topLevelSite: new URL(origin).origin },
-        onload: (response) => {
-          const status = Number(response.status) || 0;
-          const raw = typeof response.responseText === 'string'
-            ? response.responseText
-            : (typeof response.response === 'string' ? response.response : '');
-          if (status < 200 || status >= 300) {
-            if (status === 401 || status === 403) {
-              reject(new ReadError('M-Team rejected the API token (HTTP ' + status + '). Create/check the token in Control Panel → Lab.'));
-            } else {
-              reject(new ReadError('M-Team API returned HTTP ' + status + ' at /api/member/profile.'));
-            }
-            return;
-          }
-          let json = response.response && typeof response.response === 'object' ? response.response : null;
-          if (!json) {
-            try { json = JSON.parse(raw); }
-            catch (e) {
-              reject(new ReadError('M-Team API did not return valid JSON. Check the API host and token.'));
+    for (const endpoint of endpoints) {
+      const outcome = await new Promise((resolve) => {
+        GM_xmlhttpRequest({
+          method: 'POST',
+          url: endpoint,
+          headers: {
+            Accept: 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+            'Content-Type': 'application/json; charset=utf-8',
+            'x-api-key': token,
+            Origin: siteOrigin,
+            Referer: siteOrigin + '/',
+          },
+          // The profile API returns the current API-key owner's Member record
+          // when uid is omitted; use the frontend-compatible empty JSON body.
+          data: '{}',
+          responseType: 'text',
+          timeout: 20000,
+          anonymous: false,
+          fetch: true,
+          cookiePartition: { topLevelSite: siteOrigin },
+          onload: (response) => {
+            const status = Number(response.status) || 0;
+            const raw = typeof response.responseText === 'string'
+              ? response.responseText
+              : (typeof response.response === 'string' ? response.response : '');
+
+            if (status === 401) {
+              resolve({ fatal: true, error: 'M-Team rejected the API token (HTTP 401). Check Control Panel → Lab → Access Token and replace the saved token.' });
               return;
             }
-          }
-          resolve(json);
-        },
-        onerror: () => reject(new ReadError('Could not connect to the M-Team API host.')),
-        ontimeout: () => reject(new ReadError('M-Team API request timed out.')),
-        onabort: () => reject(new ReadError('M-Team API request was cancelled.')),
-      });
-    });
+            if (status === 429) {
+              resolve({ fatal: true, error: 'M-Team API rate limit reached (HTTP 429). Wait before retrying.' });
+              return;
+            }
+            if (status < 200 || status >= 300) {
+              resolve({ error: endpoint + ' returned HTTP ' + status + '.' });
+              return;
+            }
 
-    const result = mapMTeamProfilePayload(payload);
-    if (!result) {
-      const message = String(payload && (payload.message || payload.msg) || 'Unknown API response');
-      throw new ReadError('M-Team API could not verify the member profile: ' + message +
-        '. Confirm that the access token is valid and has profile access.');
+            let payload = response.response && typeof response.response === 'object'
+              ? response.response : null;
+            if (!payload) {
+              try { payload = JSON.parse(raw); }
+              catch (e) {
+                resolve({ error: endpoint + ' returned non-JSON data.' });
+                return;
+              }
+            }
+
+            const code = String(payload && payload.code !== undefined ? payload.code : '').toUpperCase();
+            const message = String(payload && (payload.message || payload.msg) || '');
+            if (code && !['0', '200', 'SUCCESS'].includes(code)) {
+              const authFailure = /key.{0,12}(invalid|无效|無效)|invalid.{0,12}(key|token)|unauthori[sz]ed|authentication required/i.test(message);
+              const clientFailure = /版本过低|版本過低|version.{0,20}(too low|outdated)|browser.{0,20}(old|outdated)/i.test(message);
+              if (authFailure) {
+                resolve({ fatal: true, error: 'M-Team says the API key is invalid or disabled. Create a new token in Control Panel → Lab → Access Token.' });
+                return;
+              }
+              if (clientFailure) {
+                resolve({ fatal: true, error: 'M-Team rejected the API client version: ' + message + '. Refresh/update the M-Team site and retry.' });
+                return;
+              }
+              resolve({ error: endpoint + ' returned API code ' + code + ': ' + message });
+              return;
+            }
+
+            const result = mapMTeamProfilePayload(payload);
+            if (!result) {
+              resolve({ error: endpoint + ' responded, but data.memberCount.uploaded/downloaded was missing.' });
+              return;
+            }
+            resolve({ result });
+          },
+          onerror: () => resolve({ error: endpoint + ' could not be reached (network/CORS error).' }),
+          ontimeout: () => resolve({ error: endpoint + ' timed out.' }),
+          onabort: () => resolve({ error: endpoint + ' request was cancelled.' }),
+        });
+      });
+
+      if (outcome.result) {
+        outcome.result.profileUrl = new URL('/user/profile', origin).href;
+        return outcome.result;
+      }
+      if (outcome.fatal) throw new ReadError(outcome.error);
+      errors.push(outcome.error || endpoint + ' failed.');
     }
-    result.profileUrl = new URL('/user/profile', origin).href;
-    return result;
+
+    throw new ReadError(
+      'M-Team profile API failed on all configured hosts. ' + errors.join(' ') +
+      ' Check that the API token is valid and that the site allows API Access Tokens.'
+    );
   }
 
   async function readTracker(tracker, context) {
