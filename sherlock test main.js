@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.9
+// @version      1.9.0
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.9';
+  const VERSION = '1.9.0';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4156,6 +4156,95 @@
    * Saving and syncing locally
    * ==================================================================== */
 
+  function recordTrackerHistory(tracker, stats, buffer, now) {
+    if (!tracker || !stats) return;
+    const uploaded = Number(stats.uploaded);
+    const downloaded = Number(stats.downloaded);
+    if (!Number.isFinite(uploaded) || uploaded < 0 ||
+        !Number.isFinite(downloaded) || downloaded < 0 ||
+        !Number.isFinite(Number(buffer))) return;
+
+    const timestamp = Number(now);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return;
+    const history = (Array.isArray(tracker.history) ? tracker.history : [])
+      .filter((point) => point && Number.isFinite(Number(point.at)) &&
+        Number(point.at) > 0 &&
+        Number.isFinite(Number(point.uploaded)) && Number(point.uploaded) >= 0 &&
+        Number.isFinite(Number(point.downloaded)) && Number(point.downloaded) >= 0 &&
+        Number.isFinite(Number(point.buffer)))
+      .sort((a, b) => Number(a.at) - Number(b.at));
+
+    const last = history[history.length - 1];
+    if (!last || timestamp - Number(last.at) >= 5 * 60 * 1000 || timestamp < Number(last.at)) {
+      history.push({ at: timestamp, buffer: Number(buffer), uploaded, downloaded });
+    }
+
+    const cutoff = timestamp - 8 * 24 * 60 * 60 * 1000;
+    // 576 snapshots = 48 hours at the 5-minute observation cadence.
+    tracker.history = history
+      .filter((point) => Number(point.at) >= cutoff)
+      .slice(-576);
+  }
+
+  function trackerDownloaded24h(tracker) {
+    const stats = tracker && tracker.stats || {};
+    const current = Number(stats.downloaded);
+    const currentAt = Number(tracker && tracker.lastSync) || Date.now();
+    if (!Number.isFinite(current) || current < 0 || !Number.isFinite(currentAt)) return null;
+
+    const cutoff = currentAt - 24 * 60 * 60 * 1000;
+    const points = (Array.isArray(tracker && tracker.history) ? tracker.history : [])
+      .filter((point) => point &&
+        Number.isFinite(Number(point.at)) &&
+        Number.isFinite(Number(point.downloaded)) &&
+        Number(point.downloaded) >= 0 &&
+        Number(point.at) > 0 &&
+        Number(point.at) <= currentAt)
+      .slice()
+      .sort((a, b) => Number(a.at) - Number(b.at));
+
+    if (!points.length) return null;
+
+    let before = null;
+    let after = null;
+    for (const point of points) {
+      const at = Number(point.at);
+      if (at <= cutoff) before = point;
+      else {
+        after = point;
+        break;
+      }
+    }
+    if (!before) return null;
+
+    const beforeAt = Number(before.at);
+    const beforeDownloaded = Number(before.downloaded);
+    let baseline = beforeDownloaded;
+    let baselineAt = beforeAt;
+
+    if (after) {
+      const afterAt = Number(after.at);
+      const afterDownloaded = Number(after.downloaded);
+      const span = afterAt - beforeAt;
+      if (span > 0) {
+        const progress = Math.max(0, Math.min(1, (cutoff - beforeAt) / span));
+        baseline = beforeDownloaded + (afterDownloaded - beforeDownloaded) * progress;
+        baselineAt = cutoff;
+      }
+    } else if (cutoff - beforeAt > 60 * 60 * 1000) {
+      // Do not pretend a much older sample represents the exact 24-hour boundary.
+      return null;
+    }
+
+    return {
+      value: current - baseline,
+      baselineAt,
+      currentAt,
+      baseline: Math.round(baseline),
+      current: Math.round(current),
+    };
+  }
+
   async function push(t, opts) {
     opts = opts || {};
     let stats = opts.stats;
@@ -4176,17 +4265,8 @@
     const nextBuffer = customTrackerBuffer(nextStats, 'one_to_one');
     t.createdAt = Number(t.createdAt) || now;
     t.history = Array.isArray(t.history) ? t.history : [];
-    // Keep real observations only. The dashboard uses these for the 24-hour delta and mini chart.
-    if (nextBuffer !== null) {
-      const last = t.history[t.history.length - 1];
-      if (!last || now - Number(last.at || 0) >= 5 * 60 * 1000) {
-        t.history.push({ at: now, buffer: nextBuffer, uploaded: Number(nextStats.uploaded), downloaded: Number(nextStats.downloaded) });
-      } else {
-        t.history[t.history.length - 1] = { at: now, buffer: nextBuffer, uploaded: Number(nextStats.uploaded), downloaded: Number(nextStats.downloaded) };
-      }
-      const cutoff = now - 8 * 24 * 60 * 60 * 1000;
-      t.history = t.history.filter((point) => Number(point.at) >= cutoff).slice(-240);
-    }
+    // Keep timestamped Uploaded/Downloaded observations for the rolling 24-hour metric.
+    if (nextBuffer !== null) recordTrackerHistory(t, nextStats, nextBuffer, now);
     t.stats = nextStats;
     t.lastSync = now;
     t.lastError = null;
@@ -4410,8 +4490,9 @@
 
   function centerTrackerMetrics(dl) {
     if (!dl) return;
-    dl.classList.remove('grid-cols-4');
-    dl.classList.add('grid-cols-3', 'w-full');
+    dl.classList.remove('grid-cols-3', 'grid-cols-4');
+    const columnCount = Math.max(3, Math.min(4, dl.children.length));
+    dl.classList.add('grid-cols-' + columnCount, 'w-full');
 
     Array.from(dl.children).forEach((field) => {
       field.classList.add('min-w-0', 'text-center');
@@ -4428,11 +4509,7 @@
     const dl = card && card.querySelector('dl');
     if (!dl) return null;
     removeNativeTrackerFooter(card, dl);
-    // 24h is omitted from tracker cards to keep only three useful metrics.
-    Array.from(dl.children).forEach((field) => {
-      const label = field.querySelector('dt');
-      if (label && /^24h$/i.test((label.textContent || '').trim())) field.remove();
-    });
+    // Preserve Sherlock's native 24h metric; only add the independently fetched Downloaded value.
     centerTrackerMetrics(dl);
 
     let field = dl.querySelector('[data-sherlock-native-downloaded]');
@@ -4629,7 +4706,7 @@
     });
 
     // 2) Render dashboard cards with the SAME layout as Sherlock's native tracker cards.
-    // Four metrics: Buffer, Ratio, Downloaded and 24h; Uploaded remains in the sidebar above.
+    // Four metrics: Buffer, Ratio, Downloaded and 24h Downloaded; Uploaded remains in the sidebar above.
     const section = h('section', {
       id: 'sherlock-local-trackers',
       class: 'mt-6 grid w-full items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4',
@@ -4702,6 +4779,20 @@
             h('dt', { class: 'eyebrow' }, 'Downloaded'),
             h('dd', { class: 'mt-1' },
               h('span', { class: 'num' }, localBytes(downloaded))
+            )
+          ),
+          h('div', {},
+            h('dt', { class: 'eyebrow' }, '24h DL'),
+            h('dd', { class: 'mt-1' },
+              (() => {
+                const delta = trackerDownloaded24h(tracker);
+                const value = delta ? signedBytes(delta.value) : 'Collecting';
+                const title = delta
+                  ? 'Downloaded during the 24 hours before ' + new Date(delta.currentAt).toLocaleString() +
+                    '; baseline at ' + new Date(delta.baselineAt).toLocaleString()
+                  : 'A complete 24-hour history window is not available yet.';
+                return h('span', { class: 'num', title }, value);
+              })()
             )
           )
         )
