@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.1
+// @version      1.8.2
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1757,7 +1757,7 @@
   const SHERLOCK_DASHBOARD_BASE_URL = 'https://app.whatstatus.info';
 
   function isSherlockDashboardPage() {
-    if (!isSherlockDashboardPage()) return false;
+    if (!/\/dashboard\/?$/.test(location.pathname)) return false;
     try {
       return location.origin === new URL(SHERLOCK_DASHBOARD_BASE_URL).origin;
     } catch (e) {
@@ -2048,7 +2048,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.1';
+  const VERSION = '1.8.2';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
