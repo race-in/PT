@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.2
+// @version      1.10.3
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1482,6 +1482,7 @@
     const matches = (fn) => hosts.some((value) => fn(value));
     if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isKaragargaHost)) return 'Karagarga';
+    if (matches(isBakaBTHost) || isBakaBTDocument(doc)) return 'BakaBT';
     if (matches(isSceneHDHost) || isSceneHDDocument(doc)) return 'SceneHD';
     if (matches(isBeyondHDHost) || isBeyondHDDocument(doc)) return 'BeyondHD';
     if (matches(isMTeamHost)) return 'M-Team';
@@ -2073,6 +2074,141 @@
     const host = trackerHostname(value);
     return host === 'karagarga.in' || host.endsWith('.karagarga.in');
   }
+  function isBakaBTHost(value) { return trackerHostname(value) === 'bakabt.me'; }
+  function isBakaBTProfileDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return /^Details for\s+.+\s+-\s+BakaBT$/i.test(String(doc.title || '')) ||
+      (!!doc.querySelector('body#userdetails') && !!doc.querySelector('table.userstats'));
+  }
+  function isBakaBTDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return /BakaBT/i.test(String(doc.title || '')) &&
+      (!!doc.querySelector('.headerbar .welcomeback a.username[href*="/user/"]') || isBakaBTProfileDocument(doc));
+  }
+  function bakaBTOwnProfileLink(doc, origin) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const anchor = doc.querySelector('.headerbar .welcomeback a.username[href*="/user/"]') ||
+      doc.querySelector('.headerbar li.welcomeback a.username[href*="/user/"]');
+    if (!anchor) return null;
+    const href = anchor.getAttribute('href') || anchor.href || '';
+    if (!href) return null;
+    try {
+      const base = new URL(origin || 'https://bakabt.me').origin;
+      const url = new URL(href, base);
+      const match = url.pathname.match(/^\/user\/(\d+)(?:\/[^/]+)?\/?$/i);
+      if (url.origin !== base || !match) return null;
+      return { url: url.href, userId: match[1], username: String(anchor.textContent || '').replace(/\s+/g, ' ').trim() };
+    } catch (e) { return null; }
+  }
+  function bakaBTProfileIdFromUrl(value, origin) {
+    try {
+      const base = new URL(origin || 'https://bakabt.me').origin;
+      const url = new URL(value, base);
+      const match = url.pathname.match(/^\/user\/(\d+)(?:\/[^/]+)?\/?$/i);
+      return url.origin === base && match ? match[1] : '';
+    } catch (e) { return ''; }
+  }
+  function parseBakaBTProfileStats(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const table = doc.querySelector('table.userstats');
+    if (!table || typeof table.querySelectorAll !== 'function') return null;
+    const stats = {};
+    for (const row of table.querySelectorAll('tr')) {
+      const cells = Array.from(row.querySelectorAll('td'));
+      if (cells.length < 2) continue;
+      const labelNode = row.querySelector('td[align="right"]') || cells[0];
+      const label = String(labelNode.textContent || '').replace(/\s+/g, ' ').trim().replace(/:$/, '').toLowerCase();
+      const value = String(cells[1].textContent || '').replace(/\s+/g, ' ').trim();
+      if (label === 'uploaded' || label === 'downloaded') {
+        const bytes = parseBytes(value, false);
+        if (bytes !== null) stats[label] = bytes;
+      } else if (label === 'share ratio' || label === 'ratio') {
+        const ratio = parseRatio(value);
+        if (ratio && !ratio.infinite) stats.ratio = ratio.value;
+      } else if (label === 'bonus points') {
+        const m = value.match(/[\d]+(?:[.,][\d]+)*/);
+        const points = m ? parseLocaleNumber(m[0]) : null;
+        if (points !== null) stats.bonus_points = points;
+      } else if (label === 'torrent comments') {
+        const count = parseCount(value);
+        if (count !== null) stats.torrent_comments = count;
+      }
+    }
+    const active = doc.querySelector('.user-statistics [title="Active torrents"]');
+    if (active) {
+      const m = String(active.textContent || '').match(/[↑↟]\s*([\d,]+)[\s\S]*?[↓↡]\s*([\d,]+)/);
+      if (m) {
+        const up = parseCount(m[1]), down = parseCount(m[2]);
+        if (up !== null) stats.seeding = up;
+        if (down !== null) stats.leeching = down;
+      }
+    }
+    if (stats.bonus_points === undefined) {
+      const bonus = doc.querySelector('.user-statistics [title="Bonus points"]');
+      const m = bonus && String(bonus.textContent || '').match(/[\d]+(?:[.,][\d]+)*/);
+      const points = m ? parseLocaleNumber(m[0]) : null;
+      if (points !== null) stats.bonus_points = points;
+    }
+    const heading = doc.querySelector('.comment_header h2 span');
+    if (heading) {
+      const parts = String(heading.textContent || '').replace(/[()]/g, '').trim().split(/\s+-\s+/);
+      if (parts.length) stats.user_class = parts[parts.length - 1].trim();
+    }
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) return null;
+    if (!Number.isFinite(stats.ratio)) stats.ratio = apiRatio(stats.uploaded, stats.downloaded);
+    return stats;
+  }
+  async function readBakaBT(tracker, context) {
+    context = context || {};
+    const origin = context.origin || tracker.origin || ('https://' + tracker.host);
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    const ownLink = bakaBTOwnProfileLink(sourceDocument, origin);
+    const ownUserId = ownLink && ownLink.userId || '';
+    const currentProfileId = bakaBTProfileIdFromUrl(pageUrl, origin);
+    let profileUrl = tracker.profileUrl || (ownLink && ownLink.url) || null;
+    let profileDoc = sourceDocument;
+    let stats = currentProfileId && (!ownUserId || ownUserId === currentProfileId)
+      ? parseBakaBTProfileStats(sourceDocument) : null;
+
+    if (!profileUrl && !isBakaBTProfileDocument(sourceDocument)) {
+      const home = await request(new URL('/', origin).href, 'text/html');
+      if (home.redirected && /(?:login|signin)/i.test(home.url || '')) throw new ReadError('BakaBT session expired. Sign in again and retry.');
+      const homeDoc = new DOMParser().parseFromString(home.text, 'text/html');
+      const homeLink = bakaBTOwnProfileLink(homeDoc, origin);
+      if (!homeLink) throw new ReadError('Could not find your signed-in BakaBT profile link in the header.');
+      profileUrl = homeLink.url;
+    }
+    if (!profileUrl && isBakaBTProfileDocument(sourceDocument)) profileUrl = pageUrl;
+    if (!profileUrl) throw new ReadError('Could not determine your BakaBT user profile URL.');
+
+    const profileId = bakaBTProfileIdFromUrl(profileUrl, origin);
+    if (!profileId) throw new ReadError('The saved BakaBT profile address is not a valid same-site /user/{id}/{name} URL.');
+    profileUrl = new URL(profileUrl, origin).href;
+    if (ownUserId && profileId !== ownUserId) throw new ReadError('The saved BakaBT profile does not match the currently signed-in account.');
+
+    if (!stats) {
+      const response = await request(profileUrl, 'text/html');
+      const finalUrl = response.url || profileUrl;
+      if ((response.redirected && /(?:login|signin)/i.test(finalUrl)) ||
+          /\/(?:login|signin)(?:\.php|\/|$)/i.test(new URL(finalUrl, origin).pathname)) {
+        throw new ReadError('BakaBT session expired. Sign in again and retry.');
+      }
+      profileDoc = new DOMParser().parseFromString(response.text, 'text/html');
+      const finalId = bakaBTProfileIdFromUrl(finalUrl, origin);
+      if (finalId && finalId !== profileId) throw new ReadError('BakaBT redirected to a different user profile; refusing to read the wrong account.');
+      stats = parseBakaBTProfileStats(profileDoc);
+      if (!stats) throw new ReadError('BakaBT profile did not contain Uploaded and Downloaded in table.userstats.');
+    }
+
+    const profileLink = bakaBTOwnProfileLink(profileDoc, origin) || ownLink;
+    const title = String(profileDoc && profileDoc.title || '').match(/^Details for\s+(.+?)\s+-\s+BakaBT$/i);
+    let pathName = '';
+    try { pathName = decodeURIComponent(new URL(profileUrl, origin).pathname.split('/').filter(Boolean)[2] || ''); } catch (e) {}
+    const username = (title && title[1].trim()) || (profileLink && profileLink.username) || pathName || tracker.username || profileId;
+    return { kind: 'bakabt', userId: profileId || (profileLink && profileLink.userId) || '', username: username || '', profileUrl, stats };
+  }
 
   // SceneHD uses a legacy userdetails.php profile.
   function isSceneHDHost(value) {
@@ -2447,7 +2583,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isSceneHDHost, isSceneHDProfileDocument, isSceneHDDocument, sceneHDOwnProfileLink, parseSceneHDProfileStats, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isBakaBTHost, isBakaBTProfileDocument, isBakaBTDocument, bakaBTOwnProfileLink, bakaBTProfileIdFromUrl, parseBakaBTProfileStats, isSceneHDHost, isSceneHDProfileDocument, isSceneHDDocument, sceneHDOwnProfileLink, parseSceneHDProfileStats, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2456,7 +2592,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.2';
+  const VERSION = '1.10.3';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3670,8 +3806,10 @@
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
 
-    // SceneHD uses its own legacy userdetails.php profile parser.
+    // BakaBT uses a custom legacy profile page, not the stock Gazelle API.
     const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    if (isBakaBTHost(hostname) || (savedIdentity && savedIdentity.name === 'BakaBT')) return 'bakabt';
+    // SceneHD uses its own legacy userdetails.php profile parser.
     if (isSceneHDHost(hostname) || (savedIdentity && savedIdentity.name === 'SceneHD')) return 'scenehd';
     // BeyondHD exposes account totals in its Laravel/F3NIX navbar and member profile.
     if (isBeyondHDHost(hostname) || (savedIdentity && savedIdentity.name === 'BeyondHD')) return 'beyondhd';
@@ -4353,6 +4491,10 @@
       !!(trackerIdentity && trackerIdentity.name === 'PolishTracker') ||
       trackerNameKey === 'polishtracker' || trackerShortKey === 'PT' ||
       isPolishTrackerDocument(sourceDocument);
+    const isBakaBT = isBakaBTHost(trackerHost) ||
+      !!(trackerIdentity && trackerIdentity.name === 'BakaBT') ||
+      trackerNameKey === 'bakabt' || trackerShortKey === 'BBT' ||
+      isBakaBTDocument(sourceDocument);
     const isSceneHD = isSceneHDHost(trackerHost) ||
       !!(trackerIdentity && trackerIdentity.name === 'SceneHD') ||
       trackerNameKey === 'scenehd' || trackerShortKey === 'SH' ||
@@ -4373,6 +4515,9 @@
     const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
+
+    // BakaBT totals come from its authenticated /user/{id}/{name} profile page.
+    if (isBakaBT) return readBakaBT(tracker, { origin, request, document: sourceDocument, pageUrl });
 
     // SceneHD totals come from its authenticated legacy userdetails.php page.
     if (isSceneHD) return readSceneHD(tracker, { origin, request, document: sourceDocument, pageUrl });
@@ -5773,6 +5918,20 @@
   }
 
   function looksLikeTracker() {
+    if (isBakaBTHost(PAGE_HOST) || isBakaBTDocument(document)) {
+      if (document.querySelector('input[type="password"]') ||
+          /\/(?:login|logout|register|signup)(?:\.php|\/|$)/i.test(location.pathname)) return false;
+      if (!bakaBTOwnProfileLink(document, location.origin)) return false;
+      const versionKey = 'sherlock.bakabt.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
+
     if (isSceneHDHost(PAGE_HOST) || isSceneHDDocument(document)) {
       if (document.querySelector('input[type="password"]') ||
           /\/(?:login|logout|register|signup)(?:\.php|\/|$)/i.test(location.pathname)) return false;
