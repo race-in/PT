@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.5
+// @version      1.7.6
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.5';
+  const VERSION = '1.7.6';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3366,9 +3366,9 @@
     let lastError;
     for (const kind of kinds) {
       try {
-        if (kind === 'gazelle') return complete(readGazelle(request));
+        if (kind === 'gazelle') return await complete(readGazelle(request));
         const link = await discoverProfile(tracker, request, origin, sourceDocument, pageUrl);
-        return complete(readProfile(link.url, link.text, si, request, origin));
+        return await complete(readProfile(link.url, link.text, si, request, origin));
       } catch (e) {
         if (!(e instanceof ReadError)) throw e;
         lastError = e;
