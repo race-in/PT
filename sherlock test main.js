@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.3
+// @version      1.8.4
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2048,7 +2048,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.3';
+  const VERSION = '1.8.4';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3343,6 +3343,61 @@
   }
 
 
+  async function readPassThePopcorn(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    const si = !!tracker.si;
+    let profileLink = null;
+    let profileError = null;
+    try {
+      profileLink = await discoverProfile(tracker, request, origin, sourceDocument, pageUrl);
+      return await readProfile(profileLink.url, profileLink.text, si, request, origin);
+    } catch (e) {
+      if (!(e instanceof ReadError)) throw e;
+      profileError = e;
+    }
+
+    // PTP's Gazelle-style header has a dedicated signed-in stats block. Scope
+    // parsing to that block only; never scan torrent-list rows for totals.
+    let statsDocument = sourceDocument;
+    let statsRoot = statsDocument && statsDocument.querySelector
+      ? statsDocument.querySelector('#userinfo_stats') : null;
+    if (!statsRoot) {
+      try {
+        const home = await request(new URL('/', origin).href, 'text/html');
+        statsDocument = new DOMParser().parseFromString(home.text, 'text/html');
+        statsRoot = statsDocument.querySelector('#userinfo_stats');
+      } catch (e) {
+        if (!(e instanceof ReadError)) throw e;
+      }
+    }
+    if (statsRoot) {
+      let stats = resolveStats(extractPairs(statsRoot), si);
+      if (stats.uploaded === undefined || stats.downloaded === undefined) {
+        stats = Object.assign(stats, resolveStats(pairsFromText(statsRoot.textContent || ''), si));
+      }
+      if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded)) {
+        const identity = profileLink
+          ? identityFromProfile(profileLink.url, profileLink.text)
+          : { userId: tracker.userId || null, username: tracker.username || '' };
+        return {
+          kind: 'profile',
+          userId: identity.userId || tracker.userId || null,
+          username: identity.username || tracker.username || '',
+          profileUrl: profileLink ? profileLink.url : (tracker.profileUrl || null),
+          stats,
+        };
+      }
+    }
+    throw new ReadError(
+      'PassThePopcorn profile/header stats could not be read. ' +
+      (profileError && profileError.message ? profileError.message : 'The signed-in #userinfo_stats block was not found.')
+    );
+  }
+
   async function readTracker(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -3354,8 +3409,14 @@
     const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
     const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
       !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
+    const isPassThePopcorn = trackerHost === 'passthepopcorn.me' ||
+      trackerHost.endsWith('.passthepopcorn.me') ||
+      !!(trackerIdentity && trackerIdentity.name === 'PassThePopcorn');
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
+
+    // PTP uses the authenticated profile/header reader, not the generic Gazelle index adapter.
+    if (isPassThePopcorn) return complete(readPassThePopcorn(tracker, { origin, request, document: sourceDocument, pageUrl }));
 
     // AnimeBytes may share generic #userinfo_stats markup with older UNIT3D
     // themes. Its host/identity exception must win before the DOM fallback.
