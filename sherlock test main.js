@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.7
+// @version      1.6.8
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -720,7 +720,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.7';
+  const VERSION = '1.6.8';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -1009,10 +1009,10 @@
       const classText = typeof el.className === 'string'
         ? el.className
         : (el.getAttribute('class') || '');
-      const m = classText.match(/(?:^|\\s)ratio-bar__([a-z_-]+)/);
+      const m = classText.match(/(?:^|\s)ratio-bar__([a-z_-]+)/);
       const key = m && keys[m[1]];
       if (!key || key in out) return;
-      const value = fits(key, String(el.textContent || '').replace(/\\s+/g, ' '), si);
+      const value = fits(key, String(el.textContent || '').replace(/\s+/g, ' '), si);
       if (value !== undefined) out[key] = value;
     });
     return out;
@@ -1032,7 +1032,7 @@
   // The member's own profile link, found in the header of a tracker page. It's the link to a profile
   // that sits in the header, not one of the many profile links further down (latest comments, etc).
   function findProfileLink(doc, base, expectedOrigin) {
-    const sels = ['a.top-nav__username', '#userinfo_username a.username', '#userinfo_username a', 'a[href*="userdetails.php?id="]', 'a[href*="user.php?id="]', 'a[href*="/users/"]', 'a[href*="/user/"]', 'a[href*="/profile/"]', 'a[href*="/members/"]'];
+    const sels = ['a.top-nav__username--highresolution', 'a.top-nav__username', '.top-nav__right a[href*="/users/"]', '.top-nav__right a[href*="/user/"]', '#userinfo_username a.username', '#userinfo_username a', 'a[href*="userdetails.php?id="]', 'a[href*="user.php?id="]', 'a[href*="/users/"]', 'a[href*="/user/"]', 'a[href*="/profile/"]', 'a[href*="/members/"]'];
     for (const sel of sels) {
       for (const a of doc.querySelectorAll(sel)) {
         const href = a.getAttribute('href') || '';
@@ -1951,32 +1951,36 @@
     const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
     const si = !!tracker.si;
 
+    const parseStatsPage = (doc) => {
+      if (!doc) return {};
+      const result = Object.assign({}, resolveStats(extractPairs(doc), si), unit3dBar(doc, si));
+      if (result.uploaded === undefined || result.downloaded === undefined) {
+        Object.assign(result, resolveStats(pairsFromText(plainText(doc)), si));
+      }
+      return result;
+    };
+
+    // Read exact counters from the currently open authenticated page first.
+    let stats = parseStatsPage(sourceDocument);
     let profileLink = sourceDocument
       ? findProfileLink(sourceDocument, pageUrl, origin)
       : null;
-    let statsDocument = sourceDocument;
 
-    // UNIT3D-rs and standard UNIT3D expose the member's own link in the header.
-    // If the current page doesn't contain it (e.g. a partial navigation), inspect the home page.
-    if (!profileLink) {
+    // Some UNIT3D themes expose the own-account link/counters only on the home-page navbar.
+    if (!profileLink || stats.uploaded === undefined || stats.downloaded === undefined) {
       const home = await request(new URL('/', origin).href, 'text/html');
-      statsDocument = new DOMParser().parseFromString(home.text, 'text/html');
-      profileLink = findProfileLink(statsDocument, home.url || (origin + '/'), origin);
-    }
-    if (!profileLink) {
-      throw new ReadError('Could not find your Cinematik profile link in the UNIT3D header.');
-    }
-
-    // UNIT3D publishes exact upload/download counters in its ratio bar on all authenticated pages.
-    // Read these directly first; fall back to the member profile page if the bar isn't present.
-    let stats = {};
-    if (statsDocument) {
-      stats = Object.assign({}, resolveStats(extractPairs(statsDocument), si), unit3dBar(statsDocument, si));
+      const homeDocument = new DOMParser().parseFromString(home.text, 'text/html');
+      if (!profileLink) {
+        profileLink = findProfileLink(homeDocument, home.url || (origin + '/'), origin);
+      }
       if (stats.uploaded === undefined || stats.downloaded === undefined) {
-        Object.assign(stats, resolveStats(pairsFromText(plainText(statsDocument)), si));
+        stats = Object.assign({}, parseStatsPage(homeDocument), stats);
       }
     }
 
+    if (!profileLink) {
+      throw new ReadError('Could not find your own UNIT3D profile link in the tracker navigation.');
+    }
     if (stats.uploaded === undefined || stats.downloaded === undefined) {
       return readProfile(profileLink.url, profileLink.text, si, request, origin);
     }
@@ -1991,6 +1995,7 @@
     };
   }
 
+
   async function readTracker(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -2001,7 +2006,7 @@
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
 
-    if (apiType === 'unit3d') return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'unit3d' || hasUnit3DStatsBar(sourceDocument)) return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
     if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
     if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
     if (apiType === 'iptorrents') return complete(readIptorrents(tracker, { origin, request, document: sourceDocument, pageUrl }));
