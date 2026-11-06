@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.0
+// @version      1.7.1
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.0';
+  const VERSION = '1.7.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3708,12 +3708,14 @@
       } }, existing ? 'Save and send' : 'Add to Sherlock');
 
       const nameField = input('name', 'Canonical tracker name (used for validation)', 'text', tracker.name, { maxlength: 60 });
+      // Create both identity fields before attaching listeners. refs.shortName is populated by input().
+      const shortNameField = input('shortName', 'Short name / abbreviation', 'text', tracker.shortName, { maxlength: 8 });
       refs.name.addEventListener('input', updatePreview);
       refs.shortName.addEventListener('input', updatePreview);
       refs.f_uploaded.addEventListener('input', updatePreview);
       const fields = h('div', { class: 'panel-fields' },
         note,
-        h('div', { class: 'grid' }, nameField, input('shortName', 'Short name / abbreviation', 'text', tracker.shortName, { maxlength: 8 })),
+        h('div', { class: 'grid' }, nameField, shortNameField),
         h('div', { class: 'row', style: 'border:0;padding:0;flex-wrap:wrap' },
           h('button', { class: 'btn', type: 'button', onclick: () => pickFile.click() }, 'Choose logo'),
           h('button', { class: 'btn', type: 'button', onclick: detectLogoAgain }, 'Use the site icon'),
