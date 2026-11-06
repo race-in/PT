@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.6
+// @version      1.9.7
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1482,6 +1482,7 @@
     const matches = (fn) => hosts.some((value) => fn(value));
     if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isKaragargaHost)) return 'Karagarga';
+    if (matches(isMTeamHost)) return 'M-Team';
     if (matches(isBlutopiaHost)) return 'Blutopia';
     if (matches(isDesiGaaneHost)) return 'DesiGaane';
     if (matches(isPolishTrackerHost) || isPolishTrackerDocument(doc)) return 'PolishTracker';
@@ -1700,6 +1701,34 @@
         user_class: classId === null || classId === undefined ? null : (classes[String(classId)] || ('Class ' + classId)),
         seeding: apiOptionalNumber(user.myseedstotal),
         hit_and_runs: apiOptionalNumber(user.hit_and_run_total) ?? apiOptionalNumber(user.hnr),
+      },
+    };
+  }
+
+  // M-Team runs the custom mTorrent API, not generic NexusPHP/Gazelle profile HTML.
+  function mapMTeamProfilePayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    const code = String(payload.code ?? '').toUpperCase();
+    const message = String(payload.message || '').toUpperCase();
+    if (code && code !== '0' && code !== 'SUCCESS' && message !== 'SUCCESS') return null;
+    const user = payload.data && typeof payload.data === 'object' ? payload.data : null;
+    const counts = user && (user.memberCount || user.member_count || user.count);
+    if (!user || !counts || user.id === null || user.id === undefined) return null;
+
+    const uploaded = apiByteNumber(counts.uploaded ?? user.uploaded);
+    const downloaded = apiByteNumber(counts.downloaded ?? user.downloaded);
+    if (uploaded === null || downloaded === null) return null;
+
+    return {
+      kind: 'mteam',
+      userId: String(user.id),
+      username: String(user.username || user.name || user.nickname || user.id),
+      stats: {
+        uploaded,
+        downloaded,
+        ratio: apiRatio(uploaded, downloaded),
+        bonus_points: apiOptionalNumber(counts.bonus ?? user.bonus),
+        user_class: user.roleName || user.role_name || user.role || null,
       },
     };
   }
@@ -2021,6 +2050,29 @@
     return host === 'karagarga.in' || host.endsWith('.karagarga.in');
   }
 
+  function isMTeamHost(value) {
+    const host = trackerHostname(value);
+    return host === 'm-team.cc' || host.endsWith('.m-team.cc') ||
+      host === 'm-team.io' || host.endsWith('.m-team.io');
+  }
+
+  function mTeamApiOrigin(siteOrigin, URLClass) {
+    const URLCtor = URLClass || URL;
+    const apiUrl = new URLCtor(siteOrigin);
+    const labels = apiUrl.hostname.split('.');
+    if (labels.length < 2 || !isMTeamHost(apiUrl.hostname)) {
+      throw new Error('Unsupported M-Team site address.');
+    }
+    // The bare canonical host has no site subdomain to replace.
+    if (labels.length === 2 && labels[0] === 'm-team') labels.unshift('api');
+    else labels[0] = 'api';
+    apiUrl.hostname = labels.join('.');
+    apiUrl.pathname = '/';
+    apiUrl.search = '';
+    apiUrl.hash = '';
+    return apiUrl.origin;
+  }
+
   function isBlutopiaHost(value) {
     const host = trackerHostname(value);
     return host === 'blutopia.cc' || host.endsWith('.blutopia.cc') ||
@@ -2200,7 +2252,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiOrigin, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2209,7 +2261,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.6';
+  const VERSION = '1.9.7';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3423,10 +3475,12 @@
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
 
+    // M-Team uses its custom mTorrent API and requires a token from Control Panel → Lab.
+    const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    if (isMTeamHost(hostname) || (savedIdentity && savedIdentity.name === 'M-Team')) return 'mteam';
     // AnimeBytes is NOT a stock Gazelle JSON tracker. Its /ajax.php endpoint
     // returns HTML; use the same signed-in profile-page fallback as the older
     // working Sherlock reader instead of locking it to the Gazelle adapter.
-    const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
     if (isPolishTrackerHost(hostname) ||
         (savedIdentity && savedIdentity.name === 'PolishTracker')) return null;
     if (hostname === 'animebytes.tv' || hostname.endsWith('.animebytes.tv') ||
@@ -3811,6 +3865,80 @@
     return readPolishTrackerApi(tracker, apiKey);
   }
 
+  async function readMTeam(tracker, context) {
+    context = context || {};
+    const origin = context.origin || tracker.origin || ('https://' + tracker.host);
+    const token = String(tracker.apiKey || GM_getValue('sherlock.mteam.apiKey', '') || '').trim();
+    if (!token) {
+      throw new ReadError('M-Team requires an API token. Open Control Panel → Lab on M-Team, create an access token, then paste it into the M-Team API Token field in Sherlock.');
+    }
+
+    let apiUrl;
+    try {
+      apiUrl = mTeamApiOrigin(origin) + '/api/member/profile';
+    } catch (e) {
+      throw new ReadError('Could not determine the M-Team API host from ' + origin + '.');
+    }
+
+    const payload = await new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== 'function') {
+        reject(new ReadError('Userscript manager cross-origin requests are unavailable.'));
+        return;
+      }
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: apiUrl,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'x-api-key': token,
+          Origin: new URL(origin).origin,
+        },
+        data: '{}',
+        responseType: 'text',
+        timeout: 25000,
+        anonymous: false,
+        fetch: true,
+        cookiePartition: { topLevelSite: new URL(origin).origin },
+        onload: (response) => {
+          const status = Number(response.status) || 0;
+          const raw = typeof response.responseText === 'string'
+            ? response.responseText
+            : (typeof response.response === 'string' ? response.response : '');
+          if (status < 200 || status >= 300) {
+            if (status === 401 || status === 403) {
+              reject(new ReadError('M-Team rejected the API token (HTTP ' + status + '). Create/check the token in Control Panel → Lab.'));
+            } else {
+              reject(new ReadError('M-Team API returned HTTP ' + status + ' at /api/member/profile.'));
+            }
+            return;
+          }
+          let json = response.response && typeof response.response === 'object' ? response.response : null;
+          if (!json) {
+            try { json = JSON.parse(raw); }
+            catch (e) {
+              reject(new ReadError('M-Team API did not return valid JSON. Check the API host and token.'));
+              return;
+            }
+          }
+          resolve(json);
+        },
+        onerror: () => reject(new ReadError('Could not connect to the M-Team API host.')),
+        ontimeout: () => reject(new ReadError('M-Team API request timed out.')),
+        onabort: () => reject(new ReadError('M-Team API request was cancelled.')),
+      });
+    });
+
+    const result = mapMTeamProfilePayload(payload);
+    if (!result) {
+      const message = String(payload && (payload.message || payload.msg) || 'Unknown API response');
+      throw new ReadError('M-Team API could not verify the member profile: ' + message +
+        '. Confirm that the access token is valid and has profile access.');
+    }
+    result.profileUrl = new URL('/user/profile', origin).href;
+    return result;
+  }
+
   async function readTracker(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -3826,6 +3954,9 @@
       !!(trackerIdentity && trackerIdentity.name === 'PolishTracker') ||
       trackerNameKey === 'polishtracker' || trackerShortKey === 'PT' ||
       isPolishTrackerDocument(sourceDocument);
+    const isMTeam = isMTeamHost(trackerHost) ||
+      !!(trackerIdentity && trackerIdentity.name === 'M-Team') ||
+      trackerNameKey === 'mteam' || trackerShortKey === 'M-TEAM';
     const isKaragarga = isKaragargaHost(trackerHost) ||
       !!(trackerIdentity && trackerIdentity.name === 'Karagarga') ||
       trackerNameKey === 'karagarga' || trackerShortKey === 'KG' ||
@@ -3835,6 +3966,9 @@
     const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
+
+    // M-Team mTorrent statistics come from its token-authenticated member API.
+    if (isMTeam) return readMTeam(tracker, { origin });
 
     // PTP uses the authenticated profile/header reader, not the generic Gazelle index adapter.
     if (isPassThePopcorn) return complete(readPassThePopcorn(tracker, { origin, request, document: sourceDocument, pageUrl }));
@@ -4132,6 +4266,8 @@
 
     const isPolishTrackerForm = isPolishTrackerHost(tracker.host) ||
       (trackerDirectoryEntry(tracker.name) || {}).name === 'PolishTracker';
+    const isMTeamForm = isMTeamHost(tracker.host) ||
+      (trackerDirectoryEntry(tracker.name) || {}).name === 'M-Team';
     const state = { stats: Object.assign({}, tracker.stats), userId: tracker.userId, username: tracker.username, kind: tracker.kind, readOk: !!existing, logo: tracker.logo };
     const refs = {};
     let busy = false;
@@ -4167,7 +4303,8 @@
         si: refs.si.checked,
         kind: refs.profileUrl.value.trim() ? 'profile' : tracker.kind,
         profileUrl: refs.profileUrl.value.trim() || null,
-        apiKey: refs.apiKey ? refs.apiKey.value.trim() : GM_getValue('sherlock.polishtracker.apiKey', ''),
+        apiKey: refs.apiKey ? refs.apiKey.value.trim() :
+          (isMTeamForm ? GM_getValue('sherlock.mteam.apiKey', '') : GM_getValue('sherlock.polishtracker.apiKey', '')),
       });
       showNote('Reading your stats from ' + t.host + '…', '');
       try {
@@ -4243,7 +4380,13 @@
         });
         busy = true; submit.disabled = true; submit.textContent = 'Sending…';
         try {
-          if (isPolishTrackerForm && refs.apiKey && refs.apiKey.value.trim()) {
+          if (isMTeamForm) {
+            const token = refs.apiKey && refs.apiKey.value.trim();
+            if (!token) throw new ReadError('M-Team API token is required. Create it in Control Panel → Lab.');
+            GM_setValue('sherlock.mteam.apiKey', token);
+            next.lastAttempt = 0;
+            next.lastError = null;
+          } else if (isPolishTrackerForm && refs.apiKey && refs.apiKey.value.trim()) {
             GM_setValue('sherlock.polishtracker.apiKey', refs.apiKey.value.trim());
             // A newly supplied key should bypass this tracker's previous failure cooldown.
             next.lastAttempt = 0;
@@ -4276,17 +4419,23 @@
         h('div', { class: 'grid' }, input('username', 'Your username', 'text', tracker.username, { maxlength: 64 }),
           h('label', {}, 'Address', h('input', { value: tracker.origin, readonly: true, disabled: true }))),
         input('profileUrl', 'Profile page address (optional)', 'url', tracker.profileUrl || '', { placeholder: tracker.origin + '/users/yourname' }),
-        isPolishTrackerForm
-          ? input('apiKey', 'PolishTracker API key (required for automatic dashboard updates)', 'password',
-              GM_getValue('sherlock.polishtracker.apiKey', ''),
-              { autocomplete: 'new-password', placeholder: 'Paste your key from Settings → API' })
-          : null,
+        isMTeamForm
+          ? input('apiKey', 'M-Team API token (required for automatic updates)', 'password',
+              GM_getValue('sherlock.mteam.apiKey', ''),
+              { autocomplete: 'new-password', placeholder: 'Paste your token from Control Panel → Lab' })
+          : (isPolishTrackerForm
+            ? input('apiKey', 'PolishTracker API key (required for automatic dashboard updates)', 'password',
+                GM_getValue('sherlock.polishtracker.apiKey', ''),
+                { autocomplete: 'new-password', placeholder: 'Paste your key from Settings → API' })
+            : null),
         h('div', { class: 'grid' }, fieldInputs),
         h('label', { class: 'check' }, (refs.si = h('input', { type: 'checkbox', checked: tracker.si, onchange: updatePreview })), 'This tracker counts GB and TB as 1000, not 1024'),
         h('label', { class: 'check' }, (refs.auto = h('input', { type: 'checkbox', checked: tracker.enabled !== false })), 'Automatically update while the Sherlock dashboard is open or when I visit this tracker'),
-        h('div', { class: 'muted' }, isPolishTrackerForm
-          ? 'PolishTracker API key is stored only in this browser profile and is sent only to api.pte.nu for account statistics. Other trackers do not use this key.'
-          : 'Saved only in this browser profile. The tracker appears on your Sherlock dashboard in this browser and auto-updates while that dashboard tab is open. No Sherlock API or token is used.'));
+        h('div', { class: 'muted' }, isMTeamForm
+          ? 'M-Team API token is stored only in this browser profile and sent only to the M-Team API host for account statistics. Create it in Control Panel → Lab. Do not share it in chat.'
+          : (isPolishTrackerForm
+            ? 'PolishTracker API key is stored only in this browser profile and is sent only to api.pte.nu for account statistics. Other trackers do not use this key.'
+            : 'Saved only in this browser profile. The tracker appears on your Sherlock dashboard in this browser and auto-updates while that dashboard tab is open. No Sherlock API or token is used.')));
       const preview = h('aside', { class: 'tracker-preview' }, logoBox, previewName,
         h('div', { class: 'preview-stat' }, h('small', {}, 'Uploaded data'), previewUploaded));
       const body = h('div', { class: 'body' }, h('div', { class: 'panel-layout' }, preview, fields));
@@ -5211,6 +5360,16 @@
   }
 
   function looksLikeTracker() {
+    if (isMTeamHost(PAGE_HOST)) {
+      if (document.querySelector('input[type="password"]') ||
+          /\/(?:login|signin|auth)(?:\/|$)/i.test(location.pathname)) return false;
+      // The mTorrent frontend is a SPA; it does not expose classic NexusPHP
+      // userdetails.php markup for the generic profile detector.
+      return /m-team|mtorrent/i.test(String(document.title || '') + ' ' +
+        String((document.body && document.body.innerText) || '').slice(0, 3000)) ||
+        !!document.querySelector('a[href*="/user/profile"], [class*="user-avatar"], [class*="user-menu"]');
+    }
+
     if (isKaragargaHost(PAGE_HOST) || isKaragargaProfileDocument(document)) {
       if (document.querySelector('input[type="password"]')) return false;
       const authenticatedProfile = isKaragargaProfileDocument(document);
@@ -5387,6 +5546,18 @@
 
   async function autoAddTracker() {
     const attemptHost = PAGE_HOST;
+    if (isMTeamHost(attemptHost) && !String(GM_getValue('sherlock.mteam.apiKey', '') || '').trim()) {
+      const promptKey = 'sherlock.mteam.token-prompt.' + attemptHost;
+      const lastPrompt = Number(GM_getValue(promptKey, 0)) || 0;
+      if (Date.now() - lastPrompt > 6 * 60 * 60 * 1000) {
+        GM_setValue(promptKey, Date.now());
+        toast('M-Team uses a token-authenticated mTorrent API. Add your token from Control Panel → Lab to finish automatic setup.', {
+          kind: 'err', title: 'M-Team needs an API token', ttl: 15000,
+        });
+        openTrackerPanel(null);
+      }
+      return;
+    }
     const cooldownKey = 'sherlock.autoadd.attempt.' + attemptHost;
     const failuresKey = 'sherlock.autoadd.failures.' + attemptHost;
     const lockKey = 'sherlock.autoadd.lock.' + attemptHost;
