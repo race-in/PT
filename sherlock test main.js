@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.6
+// @version      1.8.7
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1483,6 +1483,7 @@
     if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isBlutopiaHost)) return 'Blutopia';
     if (matches(isDesiGaaneHost)) return 'DesiGaane';
+    if (matches(isPolishTrackerHost) || isPolishTrackerDocument(doc)) return 'PolishTracker';
     if (kind === 'digitalcore' || matches(isDigitalCoreHost)) return 'DigitalCore';
     if (kind === 'torrentleech' || matches(isTorrentLeechHost) || isTorrentLeechDocument(doc)) return 'TorrentLeech';
     if (kind === 'rartracker' || matches((value) => value === 'superbits.org' || value.endsWith('.superbits.org'))) return 'SuperBits';
@@ -2025,6 +2026,19 @@
     return host === 'desigaane.rocks' || host.endsWith('.desigaane.rocks');
   }
 
+  function isPolishTrackerHost(value) {
+    const host = trackerHostname(value);
+    return host === 'pte.nu' || host.endsWith('.pte.nu') ||
+      host === 'polishtracker.net' || host.endsWith('.polishtracker.net');
+  }
+
+  function isPolishTrackerDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    if (!/polishtracker/i.test(String(doc.title || ''))) return false;
+    return !!doc.querySelector('#root') &&
+      !!doc.querySelector('script[src*="/preview/assets/"]');
+  }
+
   function trackerNameForNewTracker(title, host, origin, doc) {
     const known = knownTrackerDisplayName(host, origin, '', doc);
     if (known) return (trackerDirectoryEntry(known) || {}).name || known;
@@ -2039,7 +2053,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2048,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.6';
+  const VERSION = '1.8.7';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3266,6 +3280,8 @@
     // returns HTML; use the same signed-in profile-page fallback as the older
     // working Sherlock reader instead of locking it to the Gazelle adapter.
     const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    if (isPolishTrackerHost(hostname) ||
+        (savedIdentity && savedIdentity.name === 'PolishTracker')) return null;
     if (hostname === 'animebytes.tv' || hostname.endsWith('.animebytes.tv') ||
         (savedIdentity && savedIdentity.name === 'AnimeBytes')) return null;
 
@@ -3508,6 +3524,80 @@
       !!doc.querySelector('#userinfo_username a[href*="user.php?id="]');
   }
 
+  function parsePolishTrackerStats(doc, si) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const root = doc.querySelector('#root') || doc.body || doc;
+    if (!root || typeof root.querySelectorAll !== 'function') return null;
+
+    const pairs = extractPairs(root);
+    const text = String(root.innerText || root.textContent || '');
+    const textPairs = pairsFromText(text);
+    const stats = resolveStats(pairs, si);
+    const fallback = resolveStats(textPairs, si);
+
+    ['uploaded', 'downloaded', 'ratio', 'buffer', 'bonus_points', 'required_ratio', 'user_class'].forEach((key) => {
+      if ((stats[key] === undefined || stats[key] === null) && fallback[key] !== undefined) {
+        stats[key] = fallback[key];
+      }
+    });
+
+    return Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) ? stats : null;
+  }
+
+  async function readPolishTracker(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    const si = !!tracker.si;
+
+    if (sourceDocument) {
+      const stats = parsePolishTrackerStats(sourceDocument, si);
+      if (stats) {
+        let profileUrl = tracker.profileUrl || null;
+        if (!profileUrl && pageUrl && new URL(pageUrl).pathname !== '/') profileUrl = pageUrl;
+        let identity = { userId: tracker.userId || null, username: tracker.username || '' };
+        if (profileUrl) {
+          try { identity = Object.assign(identity, identityFromProfile(profileUrl, '')); } catch (e) { /* optional */ }
+        }
+        return {
+          kind: 'profile',
+          userId: identity.userId || tracker.userId || null,
+          username: identity.username || tracker.username || '',
+          profileUrl,
+          stats,
+        };
+      }
+    }
+
+    // The supplied HTML is a React application shell; server HTML has no account
+    // data unless the React page has rendered it in the current browser document.
+    const target = tracker.profileUrl || pageUrl || (origin + '/');
+    try {
+      const response = await request(target, 'text/html');
+      const doc = new DOMParser().parseFromString(response.text, 'text/html');
+      const stats = parsePolishTrackerStats(doc, si);
+      if (stats) {
+        return {
+          kind: 'profile',
+          userId: tracker.userId || null,
+          username: tracker.username || '',
+          profileUrl: tracker.profileUrl || response.url || target,
+          stats,
+        };
+      }
+    } catch (e) {
+      if (!(e instanceof ReadError)) throw e;
+      throw new ReadError('PolishTracker could not load its profile HTML: ' + e.message);
+    }
+
+    throw new ReadError(
+      'PolishTracker is a React application. Its HTML shell contains no account stats; ' +
+      'the signed-in page must render Uploaded and Downloaded inside the app before Sherlock can read them.'
+    );
+  }
+
   async function readTracker(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -3517,6 +3607,12 @@
     const apiType = trackerApiType(tracker);
     const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
     const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
+    const trackerNameKey = normalizeTrackerDirectoryName(tracker.name || tracker.fullName || '');
+    const trackerShortKey = String(tracker.shortName || '').trim().toUpperCase();
+    const isPolishTracker = isPolishTrackerHost(trackerHost) ||
+      !!(trackerIdentity && trackerIdentity.name === 'PolishTracker') ||
+      trackerNameKey === 'polishtracker' || trackerShortKey === 'PT' ||
+      isPolishTrackerDocument(sourceDocument);
     const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
       !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
     const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
@@ -3525,6 +3621,9 @@
 
     // PTP uses the authenticated profile/header reader, not the generic Gazelle index adapter.
     if (isPassThePopcorn) return complete(readPassThePopcorn(tracker, { origin, request, document: sourceDocument, pageUrl }));
+
+    // PolishTracker uses ReaperEngine, not Gazelle or UNIT3D.
+    if (isPolishTracker) return complete(readPolishTracker(tracker, { origin, request, document: sourceDocument, pageUrl }));
 
     // AnimeBytes may share generic #userinfo_stats markup with older UNIT3D
     // themes. Its host/identity exception must win before the DOM fallback.
@@ -4616,6 +4715,12 @@
       }
       return true;
     }
+    if (isPolishTrackerHost(PAGE_HOST) || isPolishTrackerDocument(document)) {
+      if (document.querySelector('input[type="password"]') ||
+          /\/(?:login|signin|auth)(?:\/|$)/i.test(location.pathname)) return false;
+      return !!parsePolishTrackerStats(document, false);
+    }
+
     const isAnimeBytesHost = HOST === 'animebytes.tv' || HOST.endsWith('.animebytes.tv');
     if (isAnimeBytesHost) {
       const loginPath = /\/(?:login|signin)(?:\.php|\/|$)/i.test(location.pathname);
