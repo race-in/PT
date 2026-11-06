@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.9
+// @version      1.7.0
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -194,6 +194,1281 @@
     return name ? name.slice(0, 40) : '';
   }
 
+
+  // Canonical tracker identities extracted from the supplied Private Tracker List.
+  // Keep full names for matching/API payloads; use short codes for every visible tracker label.
+  const TRACKER_DIRECTORY = Object.freeze([
+  {
+    "name": "3ChangTrai",
+    "short": "3CT",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "Abnormal",
+    "short": "ABN",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "ABTorrents",
+    "short": "ABT",
+    "source": "official",
+    "software": "U-232"
+  },
+  {
+    "name": "Aidoru!Online",
+    "short": "AO",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "Aither",
+    "short": "ATH",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "AlphaRatio",
+    "short": "AR",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Anime Datenbank Tracker",
+    "short": "ADBT",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "AnimeBytes",
+    "short": "AB",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "AnimeTorrents",
+    "short": "AnT",
+    "source": "official",
+    "software": "XBTIT"
+  },
+  {
+    "name": "AnimeWorld",
+    "short": "AW",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Anthelion",
+    "short": "ANT",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "AsianCinema",
+    "short": "ACM",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "AstraTorrent",
+    "short": "AT",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "Audionews",
+    "short": "AN",
+    "source": "official",
+    "software": "TorrentPier"
+  },
+  {
+    "name": "AvistaZ",
+    "short": "AZ",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "BakaBT",
+    "short": "BBT",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Bemaniso",
+    "short": "SOWS",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "BeyondHD",
+    "short": "BHD",
+    "source": "official",
+    "software": "F3NIX"
+  },
+  {
+    "name": "Bibliotik",
+    "short": "BiB",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "BitBr",
+    "short": "BTBR",
+    "source": "official",
+    "software": "chinese"
+  },
+  {
+    "name": "BitPorn",
+    "short": "BP",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "BitTorrentFiles",
+    "short": "BTF",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Blutopia",
+    "short": "BLU",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Borgzelle",
+    "short": "Borg",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "BrSociety",
+    "short": "BRS",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "BrasilTracker",
+    "short": "BT",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "BroadcasTheNet",
+    "short": "BTN",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "BrokenStones",
+    "short": "BRKs",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "BTSCHOOL",
+    "short": "BTS",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "BwTorrents",
+    "short": "BwT",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "C411",
+    "short": "C411",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "Canal Street",
+    "short": "CAST",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "CapybaraBR",
+    "short": "CBR",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "CarPT",
+    "short": "CP",
+    "source": "generated",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "Cathode-Ray.Tube",
+    "short": "CRT",
+    "source": "official",
+    "software": "Luminance"
+  },
+  {
+    "name": "CGPeers",
+    "short": "CGP",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Cinematik",
+    "short": "TiK",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "CinemaZ",
+    "short": "CZ",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "ClearJAV (API)",
+    "short": "CJ",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Coastal Music Crew",
+    "short": "CMC",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Concertos",
+    "short": "CONC",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "CynicalGen",
+    "short": "CG",
+    "source": "official",
+    "software": "XBTIT"
+  },
+  {
+    "name": "DanishBytes",
+    "short": "DBy",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Dark-Shadow",
+    "short": "DS",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "DasUnerwartete",
+    "short": "DU",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "DarkPeers",
+    "short": "DP",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "DeepBassNine",
+    "short": "DB9",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "DesiTorrents",
+    "short": "DT",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "DICMusic",
+    "short": "DIC",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "DigitalCore",
+    "short": "DC",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "DocsPedia.world",
+    "short": "DPW",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "Empornium",
+    "short": "EMP",
+    "source": "official",
+    "software": "Luminance"
+  },
+  {
+    "name": "eShareNet",
+    "short": "ESN",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "ExoticaZ",
+    "short": "EZ",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "ExtremeBits",
+    "short": "XB",
+    "source": "official",
+    "software": "TBDev"
+  },
+  {
+    "name": "F1Carreras",
+    "short": "F1C",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "F1GP",
+    "short": "F1GP",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Fappaizuri",
+    "short": "FAPP",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "FearNoPeer",
+    "short": "FNP",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Femdomcult",
+    "short": "FDC",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "FileList",
+    "short": "FL",
+    "source": "official",
+    "software": "Ocelot"
+  },
+  {
+    "name": "GazelleGames",
+    "short": "GGn",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Gemini Tracker",
+    "short": "G3MINI",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Generation Free",
+    "short": "GF",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "GreatPosterWall",
+    "short": "GPW",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "GGPT",
+    "short": "GGPT",
+    "source": "generated",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "HappyFappy",
+    "short": "HF",
+    "source": "official",
+    "software": "Luminance"
+  },
+  {
+    "name": "Hawke-UNO",
+    "short": "HUNO",
+    "source": "official",
+    "software": "Custom UNIT3D Fork"
+  },
+  {
+    "name": "HD-Forever",
+    "short": "HDF",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "HD-Space",
+    "short": "HDS",
+    "source": "official",
+    "software": "XBTIT"
+  },
+  {
+    "name": "HD-Torrents",
+    "short": "HDT",
+    "source": "official",
+    "software": "XBTIT"
+  },
+  {
+    "name": "HDArea",
+    "short": "HDA",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "HDBits",
+    "short": "HDB",
+    "source": "official",
+    "software": "XBTIT"
+  },
+  {
+    "name": "HDChina",
+    "short": "HDC",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "HDFans",
+    "short": "HDFans",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "HeBits",
+    "short": "HEB",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "HomieHelpDesk",
+    "short": "HHD",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Hon3yHD",
+    "short": "HH",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "House of Devil",
+    "short": "HoD",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "HQMusic",
+    "short": "HQM",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Immortuos",
+    "short": "IMMO",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "IndieTorrents",
+    "short": "IP",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Infire",
+    "short": "INF",
+    "source": "official",
+    "software": "U-232"
+  },
+  {
+    "name": "iNSANE",
+    "short": "IN",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "IPTorrents",
+    "short": "IPT",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "ItaTorrents",
+    "short": "ITT",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "JME-REUNIT3D",
+    "short": "JME",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "JPopsuki",
+    "short": "JPS",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "JPTVTS",
+    "short": "JPTV",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "Karagarga",
+    "short": "KG",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Keep Friends",
+    "short": "FRDS",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "KrayTracker",
+    "short": "KT",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Le Saloon",
+    "short": "LS",
+    "source": "generated",
+    "software": "XBTIT"
+  },
+  {
+    "name": "Last Digital Underground",
+    "short": "LDU",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Lat-Team",
+    "short": "LT",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "LearnFlakes",
+    "short": "LF",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "LegacyHD",
+    "short": "LHD",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Libble",
+    "short": "LiB",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "LinkoManija",
+    "short": "LM",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "LST",
+    "short": "LST",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "LzTr",
+    "short": "LT2",
+    "source": "generated",
+    "software": "Gazelle"
+  },
+  {
+    "name": "M-Team",
+    "short": "MTTP",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "MaDs Revolution",
+    "short": "MaDs",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Malayabits",
+    "short": "MB",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Materialize",
+    "short": "MAT",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Max New Vision",
+    "short": "MNV",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Milkie",
+    "short": "MILK",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "MojBlink",
+    "short": "MBJ",
+    "source": "official",
+    "software": "TBDEV"
+  },
+  {
+    "name": "MoreThanTV",
+    "short": "MTV",
+    "source": "official",
+    "software": "Luminance"
+  },
+  {
+    "name": "MusicVids",
+    "short": "MV",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "MyAnonaMouse",
+    "short": "MAM",
+    "source": "official",
+    "software": "TBDev"
+  },
+  {
+    "name": "MySpleen",
+    "short": "MS",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "nCore",
+    "short": "NC",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "Nebulance",
+    "short": "NBL",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "New Propaganda",
+    "short": "NP",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "New Real World",
+    "short": "NRW",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "NewHeaven",
+    "short": "NH",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Nostradamus",
+    "short": "NOST",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "NordicQuality (API)",
+    "short": "NQ",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "OldToons",
+    "short": "OTW",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "OnlyEncodes+",
+    "short": "OE",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Orpheus",
+    "short": "OPS",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "OurBits",
+    "short": "OB",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "PassThePopcorn",
+    "short": "PTP",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Phoenix Project",
+    "short": "PHX",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "PixelCove",
+    "short": "PxC",
+    "source": "official",
+    "software": "Luminance"
+  },
+  {
+    "name": "PolishTracker",
+    "short": "PT",
+    "source": "official",
+    "software": "ReaperEngine"
+  },
+  {
+    "name": "Pornbay",
+    "short": "PB",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Portugas",
+    "short": "PTG",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "PrivateHD",
+    "short": "PHD",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "PTerClub",
+    "short": "PTer",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "PTFiles",
+    "short": "PTF",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "PTFans",
+    "short": "PTFans",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "punck-tracker",
+    "short": "PT2",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "PuroVicio",
+    "short": "PRV",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Racing4Everyone",
+    "short": "R4E",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "RacingForMe",
+    "short": "RFM",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "Rastastugan",
+    "short": "RAS",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Redacted",
+    "short": "RED",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "Retroflix",
+    "short": "RF",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "ReelFliX",
+    "short": "RFX",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "RevolutionTT",
+    "short": "RTT",
+    "source": "official",
+    "software": "TBdev"
+  },
+  {
+    "name": "RocketHD",
+    "short": "RHD",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Samaritano",
+    "short": "SAMA",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "SceneHD",
+    "short": "SH",
+    "source": "generated",
+    "software": null
+  },
+  {
+    "name": "SceneLinks",
+    "short": "SL",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "SceneTime",
+    "short": "ST",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "SecretCinema",
+    "short": "SC",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "seedpool",
+    "short": "SP",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "SeedFile",
+    "short": "SF",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Shareisland",
+    "short": "SHR",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Share Friends Project",
+    "short": "SFP",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Simurg",
+    "short": "SIM",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "SkipTheCommercials",
+    "short": "STC",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "SnowPT (Skyeysnow)",
+    "short": "SSPT",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "SocietyGlitch",
+    "short": "SG",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "SpeedApp",
+    "short": "SA",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "Spirit of Revolution",
+    "short": "SoR",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "SportsCult",
+    "short": "SC",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "SpringSunday",
+    "short": "SSD",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "SugoiMusic",
+    "short": "SM",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "SuperBits",
+    "short": "SBS",
+    "source": "official",
+    "software": "rartracker"
+  },
+  {
+    "name": "Swarmazon",
+    "short": "SMZ",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Tasmanit",
+    "short": "TAS",
+    "source": "official",
+    "software": "TSSE"
+  },
+  {
+    "name": "The Falling Angels",
+    "short": "TFA",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "The Horror Charnel",
+    "short": "THC",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "The Leach Zone",
+    "short": "TLZ",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "The New Retro",
+    "short": "TNR",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "The Old School",
+    "short": "TOS",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "The Paradiese",
+    "short": "TP",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "The Shinning",
+    "short": "TSH",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "The-Crazy-Ones",
+    "short": "TCO",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "The-New-Fun",
+    "short": "TNF",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "TheGeeks",
+    "short": "TG",
+    "source": "official",
+    "software": "TCG"
+  },
+  {
+    "name": "TheMixingBowl",
+    "short": "TMB",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "ThePlace",
+    "short": "TP",
+    "source": "official",
+    "software": "TCG"
+  },
+  {
+    "name": "TheScenePlace",
+    "short": "TSP",
+    "source": "official",
+    "software": "XBTIT"
+  },
+  {
+    "name": "TheVault",
+    "short": "TV",
+    "source": "official",
+    "software": "TCG"
+  },
+  {
+    "name": "TNTracker",
+    "short": "TN",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "Torrent Explosiv",
+    "short": "TE",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Torrent Sector Crew",
+    "short": "TSC",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Torrent Trader",
+    "short": "TT",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Torrent-Syndikat",
+    "short": "TS",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "TorrentBD",
+    "short": "TBD",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "TorrentDay",
+    "short": "TD",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "TorrentLand",
+    "short": "TL2",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "TorrentLeech",
+    "short": "TL",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Torrentleech.pl",
+    "short": "TL.pl",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "Torrenteros",
+    "short": "TTR",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "ToTheGlory",
+    "short": "TTG",
+    "source": "official",
+    "software": "TBSource"
+  },
+  {
+    "name": "TR4KER",
+    "short": "T4",
+    "source": "official",
+    "software": "Custom"
+  },
+  {
+    "name": "TurkSeed",
+    "short": "TS2",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "TV-Vault",
+    "short": "TVV",
+    "source": "official",
+    "software": "Gazelle"
+  },
+  {
+    "name": "U2",
+    "short": "U2",
+    "source": "official",
+    "software": "NexusPHP"
+  },
+  {
+    "name": "Universal-Torrents",
+    "short": "UT",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Unwalled",
+    "short": "UNW",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "upload.cx",
+    "short": "ULCX",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Upscale Vault",
+    "short": "UV",
+    "source": "official",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "Utopia",
+    "short": "UTOP",
+    "source": "generated",
+    "software": "UNIT3D"
+  },
+  {
+    "name": "V3X",
+    "short": "VX",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "World-of-Tomorrow",
+    "short": "WoT",
+    "source": "official",
+    "software": "NetVision"
+  },
+  {
+    "name": "Xbtmusic",
+    "short": "XBT",
+    "source": "official",
+    "software": "xbtmusic Original"
+  },
+  {
+    "name": "XtremeWrestlingTorrents",
+    "short": "XWT",
+    "source": "official",
+    "software": null
+  },
+  {
+    "name": "YggReborn",
+    "short": "YR",
+    "source": "generated",
+    "software": "Custom"
+  },
+  {
+    "name": "YUSCENE",
+    "short": "YUSC",
+    "source": "generated",
+    "software": "UNIT3D"
+  }
+]);
+  const TRACKER_DIRECTORY_BY_NAME = new Map();
+  TRACKER_DIRECTORY.forEach((entry) => {
+    TRACKER_DIRECTORY_BY_NAME.set(normalizeTrackerDirectoryName(entry.name), entry);
+  });
+
+  function normalizeTrackerDirectoryName(value) {
+    return String(value || '').toLowerCase()
+      .replace(/\s*\(api\)\s*$/i, '')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  function trackerDirectoryEntry(value) {
+    return TRACKER_DIRECTORY_BY_NAME.get(normalizeTrackerDirectoryName(value)) || null;
+  }
+
+  function trackerDirectoryHostEntry(value) {
+    const host = trackerHostname(value);
+    if (!host) return null;
+    const labels = host.split('.').filter(Boolean);
+    const twoPartSuffixes = ['co.uk','org.uk','ac.uk','com.au','net.au','org.au','co.nz','com.br','com.tr','com.sg','com.tw','co.in','net.in','org.in','co.za','com.mx','com.ar','com.pl','com.ua'];
+    const suffix = labels.slice(-2).join('.');
+    const label = labels.length > 2 && twoPartSuffixes.includes(suffix)
+      ? labels[labels.length - 3]
+      : labels.length > 1 ? labels[labels.length - 2] : labels[0];
+    return trackerDirectoryEntry(label);
+  }
+
+  function validateTrackerIdentity(name, shortName) {
+    const entry = trackerDirectoryEntry(name);
+    if (!entry) return { known: false, valid: true, name: String(name || '').trim(), shortName: String(shortName || '').trim(), source: 'custom' };
+    const supplied = String(shortName || '').trim();
+    return {
+      known: true,
+      valid: !supplied || supplied === entry.short,
+      name: entry.name,
+      shortName: entry.short,
+      source: entry.source,
+    };
+  }
+
   function knownTrackerDisplayName(host, origin, kind, doc) {
     const hosts = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
     const matches = (fn) => hosts.some((value) => fn(value));
@@ -224,15 +1499,39 @@
 
   function canonicalSavedTrackerName(tracker) {
     tracker = tracker || {};
-    return knownTrackerDisplayName(tracker.host, tracker.origin, tracker.kind, null) ||
-      cleanTrackerDisplayName(guessName(tracker.name, tracker.host), tracker.host, tracker.origin) ||
-      cleanTrackerDisplayName(tracker.name, tracker.host, tracker.origin) ||
-      'Tracker';
+    const known = knownTrackerDisplayName(tracker.host, tracker.origin, tracker.kind, null);
+    if (known) return (trackerDirectoryEntry(known) || {}).name || known;
+
+    const hostEntry = trackerDirectoryHostEntry(tracker.host) || trackerDirectoryHostEntry(tracker.origin);
+    if (hostEntry) return hostEntry.name;
+
+    const candidates = [
+      tracker.fullName,
+      cleanTrackerDisplayName(guessName(tracker.name, tracker.host), tracker.host, tracker.origin),
+      cleanTrackerDisplayName(tracker.name, tracker.host, tracker.origin),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      const entry = trackerDirectoryEntry(candidate);
+      if (entry) return entry.name;
+    }
+    return candidates[0] || 'Tracker';
   }
 
   function shortNameOf(name) {
-    const caps = (name.match(/[A-Z0-9]/g) || []).slice(0, 4).join('');
-    return (caps.length >= 2 ? caps : name.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'TRK').slice(0, 8);
+    const entry = trackerDirectoryEntry(name);
+    if (entry) return entry.short;
+    const value = String(name || '');
+    const caps = (value.match(/[A-Z0-9]/g) || []).slice(0, 4).join('');
+    return (caps.length >= 2 ? caps : value.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'TRK').slice(0, 8);
+  }
+
+  function trackerDisplayName(tracker) {
+    if (typeof tracker === 'string') return shortNameOf(tracker);
+    tracker = tracker || {};
+    const fullName = canonicalSavedTrackerName(tracker);
+    const identity = trackerDirectoryEntry(fullName);
+    if (identity) return identity.short;
+    return String(tracker.shortName || shortNameOf(fullName || tracker.host) || 'TRK').trim().slice(0, 8);
   }
 
   // Combine Sherlock's native dashboard totals with browser-local custom tracker totals.
@@ -710,15 +2009,20 @@
   }
 
   function trackerNameForNewTracker(title, host, origin, doc) {
-    return knownTrackerDisplayName(host, origin, '', doc) ||
-      cleanTrackerDisplayName(guessName(title, host), host, origin) ||
-      'Tracker';
+    const known = knownTrackerDisplayName(host, origin, '', doc);
+    if (known) return (trackerDirectoryEntry(known) || {}).name || known;
+
+    const hostEntry = trackerDirectoryHostEntry(host) || trackerDirectoryHostEntry(origin);
+    if (hostEntry) return hostEntry.name;
+
+    const guessed = cleanTrackerDisplayName(guessName(title, host), host, origin);
+    return (trackerDirectoryEntry(guessed) || {}).name || guessed || 'Tracker';
   }
 
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -727,7 +2031,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.9';
+  const VERSION = '1.7.0';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -802,12 +2106,11 @@
       Object.values(trackers).forEach((tracker) => {
         if (!tracker || typeof tracker !== 'object') return;
         const cleanName = canonicalSavedTrackerName(tracker);
-        if (tracker.name !== cleanName) {
+        const officialIdentity = trackerDirectoryEntry(cleanName);
+        const expectedShortName = officialIdentity ? officialIdentity.short : (tracker.shortName || shortNameOf(cleanName));
+        if (tracker.name !== cleanName || tracker.shortName !== expectedShortName) {
           tracker.name = cleanName;
-          tracker.shortName = shortNameOf(cleanName);
-          changed = true;
-        } else if (!tracker.shortName) {
-          tracker.shortName = shortNameOf(cleanName);
+          tracker.shortName = expectedShortName;
           changed = true;
         }
       });
@@ -829,9 +2132,10 @@
     const key = isIptorrentsHost(t.host) || isIptorrentsHost(t.origin) ? 'iptorrents.com' : t.host;
     t.host = key;
     const cleanName = canonicalSavedTrackerName(t);
-    if (t.name !== cleanName) t.shortName = shortNameOf(cleanName);
+    const officialIdentity = trackerDirectoryEntry(cleanName);
+    const expectedShortName = officialIdentity ? officialIdentity.short : (t.shortName || shortNameOf(cleanName));
     t.name = cleanName;
-    if (!t.shortName) t.shortName = shortNameOf(cleanName);
+    t.shortName = expectedShortName;
     all[key] = t;
     store.trackers = all;
   }
@@ -915,7 +2219,7 @@
   async function readRartracker(tracker, request) {
     const fetcher = request || fetchText;
     const response = await fetcher('/api/v1/status', 'application/json');
-    const payload = parseTrackerApiJson(response, tracker.name || 'Rartracker');
+    const payload = parseTrackerApiJson(response, trackerDisplayName(tracker) || 'Rartracker');
     const data = mapRartrackerStatus(payload);
     if (!data) throw new ReadError('Rartracker /api/v1/status did not contain a signed-in user with valid uploaded and downloaded totals.');
 
@@ -923,7 +2227,7 @@
     // keep the verified status totals if a tracker does not expose every profile field.
     try {
       const detailResponse = await fetcher('/api/v1/users/' + encodeURIComponent(data.userId), 'application/json');
-      const detailPayload = parseTrackerApiJson(detailResponse, tracker.name || 'Rartracker');
+      const detailPayload = parseTrackerApiJson(detailResponse, trackerDisplayName(tracker) || 'Rartracker');
       const detail = detailPayload && (detailPayload.user || detailPayload);
       if (detail && typeof detail === 'object') {
         const bonus = apiOptionalNumber(detail.bonuspoang);
@@ -2336,10 +3640,23 @@
       } });
 
     const fieldInputs = FIELDS.map(([key, label, kind]) => input('f_' + key, label, 'text', fieldText(kind, state.stats[key])));
-    const previewName = h('div', { class: 'preview-name' }, tracker.name || HOST);
+    const previewName = h('div', { class: 'preview-name' }, trackerDisplayName(tracker) || HOST);
     const previewUploaded = h('strong', {}, fieldText('bytes', state.stats.uploaded) || 'Not detected yet');
+    let shortNameDirectoryLocked = !!trackerDirectoryEntry(tracker.name);
     const updatePreview = () => {
-      previewName.textContent = refs.name.value.trim() || tracker.name || HOST;
+      const enteredName = refs.name.value.trim() || tracker.name || HOST;
+      const canonicalName = trackerNameForNewTracker(enteredName, tracker.host || HOST, tracker.origin || location.origin, document);
+      const identity = trackerDirectoryEntry(enteredName) || trackerDirectoryEntry(canonicalName);
+      if (identity) {
+        refs.shortName.value = identity.short;
+        refs.shortName.readOnly = true;
+        shortNameDirectoryLocked = true;
+      } else {
+        if (shortNameDirectoryLocked) refs.shortName.value = shortNameOf(canonicalName || enteredName);
+        refs.shortName.readOnly = false;
+        shortNameDirectoryLocked = false;
+      }
+      previewName.textContent = refs.shortName.value.trim() || shortNameOf(canonicalName || enteredName) || HOST;
       const raw = refs.f_uploaded.value.trim();
       const parsed = readField('bytes', raw, refs.si.checked);
       previewUploaded.textContent = parsed === null ? (raw || 'Not detected yet') : sizeLabel(parsed);
@@ -2361,8 +3678,12 @@
         const username = refs.username.value.trim();
         if (!username) return showNote('Enter your username on this tracker.', 'err');
 
+        const requestedName = refs.name.value.trim() || tracker.name;
+        const canonicalName = trackerNameForNewTracker(requestedName, tracker.host || HOST, tracker.origin || location.origin, document);
+        const identity = validateTrackerIdentity(canonicalName, refs.shortName.value);
         const next = Object.assign({}, tracker, {
-          name: refs.name.value.trim() || tracker.name, shortName: (refs.shortName.value.trim() || shortNameOf(refs.name.value)).slice(0, 8),
+          name: identity.known ? identity.name : canonicalName,
+          shortName: (identity.known ? identity.shortName : (refs.shortName.value.trim() || shortNameOf(canonicalName))).slice(0, 8),
           profileUrl: refs.profileUrl.value.trim() || tracker.profileUrl || null, username, userId: state.userId || username.toLowerCase(),
           si, enabled: true, logo: state.logo, stats,
           kind: state.readOk && state.kind !== 'manual' ? state.kind : 'manual',
@@ -2373,19 +3694,20 @@
           next.enabled = !!refs.auto.checked;
           saveTracker(next);
           close();
-          toast(next.name + ' saved locally. Open your Sherlock dashboard in this browser to see it.', { kind: 'ok', ttl: 9000, actions: store.url ? [{ label: 'Open Sherlock', href: store.url + '/dashboard' }] : [] });
+          toast(trackerDisplayName(next) + ' saved locally. Open your Sherlock dashboard in this browser to see it.', { kind: 'ok', ttl: 9000, actions: store.url ? [{ label: 'Open Sherlock', href: store.url + '/dashboard' }] : [] });
         } catch (e) {
           showNote(e.message, 'err');
           busy = false; submit.disabled = false; submit.textContent = existing ? 'Save and send' : 'Add to Sherlock';
         }
       } }, existing ? 'Save and send' : 'Add to Sherlock');
 
-      const nameField = input('name', 'Tracker name', 'text', tracker.name, { maxlength: 60 });
+      const nameField = input('name', 'Canonical tracker name (used for validation)', 'text', tracker.name, { maxlength: 60 });
       refs.name.addEventListener('input', updatePreview);
+      refs.shortName.addEventListener('input', updatePreview);
       refs.f_uploaded.addEventListener('input', updatePreview);
       const fields = h('div', { class: 'panel-fields' },
         note,
-        h('div', { class: 'grid' }, nameField, input('shortName', 'Short name', 'text', tracker.shortName, { maxlength: 8 })),
+        h('div', { class: 'grid' }, nameField, input('shortName', 'Short name / abbreviation', 'text', tracker.shortName, { maxlength: 8 })),
         h('div', { class: 'row', style: 'border:0;padding:0;flex-wrap:wrap' },
           h('button', { class: 'btn', type: 'button', onclick: () => pickFile.click() }, 'Choose logo'),
           h('button', { class: 'btn', type: 'button', onclick: detectLogoAgain }, 'Use the site icon'),
@@ -2402,7 +3724,7 @@
       const body = h('div', { class: 'body' }, h('div', { class: 'panel-layout' }, preview, fields));
 
       return h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Add tracker to Sherlock' },
-        h('header', {}, h('h2', {}, existing ? 'Edit ' + tracker.name : 'Add ' + tracker.name + ' to Sherlock'), h('button', { class: 'btn', style: 'margin-left:auto', onclick: close }, '×')),
+        h('header', {}, h('h2', {}, existing ? 'Edit ' + trackerDisplayName(tracker) : 'Add ' + trackerDisplayName(tracker) + ' to Sherlock'), h('button', { class: 'btn', style: 'margin-left:auto', onclick: close }, '×')),
         body,
         h('footer', {}, h('button', { class: 'btn', type: 'button', onclick: reread }, 'Read again'), h('button', { class: 'btn', onclick: close }, 'Cancel'), submit));
     };
@@ -2467,12 +3789,12 @@
     try {
       await push(t, { remote: !!opts.remote });
       saveTracker(t);
-      if (opts.manual) toast(t.name + ' updated in this browser and on your local Sherlock dashboard.', { kind: 'ok', ttl: 9000,
+      if (opts.manual) toast(trackerDisplayName(t) + ' updated in this browser and on your local Sherlock dashboard.', { kind: 'ok', ttl: 9000,
         actions: store.url ? [{ label: 'Open dashboard', href: store.url + '/dashboard' }] : [] });
     } catch (e) {
       t.lastError = e.message || 'Could not read tracker statistics.';
       saveTracker(t);
-      if (opts.manual) toast(t.lastError, { kind: 'err', title: 'Sherlock: ' + t.name, ttl: 12000 });
+      if (opts.manual) toast(t.lastError, { kind: 'err', title: 'Sherlock: ' + trackerDisplayName(t), ttl: 12000 });
     } finally {
       GM_setValue(lockKey, 0);
     }
@@ -2872,13 +4194,13 @@
           href: tracker.origin || '#',
           target: '_blank',
           rel: 'noopener noreferrer',
-          title: tracker.name || tracker.host,
+          title: trackerDisplayName(tracker),
           'data-sherlock-custom-nav-host': tracker.host,
         },
           logo,
           h('span', {
             class: 'flex-1 truncate',
-          }, tracker.name || tracker.host),
+          }, trackerDisplayName(tracker)),
           h('span', {
             class: 'text-xs text-muted',
           }, uploadedLabel)
@@ -2931,8 +4253,8 @@
           logo,
           h('span', {
             class: 'flex-1 min-w-0 truncate font-medium',
-            title: tracker.name || tracker.host,
-          }, tracker.name || tracker.host),
+            title: trackerDisplayName(tracker),
+          }, trackerDisplayName(tracker)),
           status
         ),
         h('dl', { class: 'mt-4 grid grid-cols-3 gap-3 text-sm' },
@@ -3000,7 +4322,7 @@
   function offerToAdd() {
     const name = guessName(document.title, HOST);
     toast('This tracker is not in your custom list yet.', {
-      title: 'Add ' + name + ' to Sherlock?',
+      title: 'Add ' + shortNameOf(name) + ' to Sherlock?',
       ttl: 12000,
       actions: [{ label: 'Add tracker', onClick: () => openTrackerPanel(null), primary: true }],
     });
@@ -3102,13 +4424,13 @@
       const all = store.trackers;
       const t = all[HOST];
       if (!t) return toast('This tracker has not been added yet.', { kind: 'err' });
-      if (!window.confirm('Remove ' + (t.name || t.host) + ' from this browser’s custom trackers?')) return;
+      if (!window.confirm('Remove ' + trackerDisplayName(t) + ' from this browser’s custom trackers?')) return;
       delete all[HOST]; store.trackers = all;
       // Permit immediate re-detection after explicit removal.
       GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
       GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
       if (/\/dashboard\/?$/.test(location.pathname)) renderLocalDashboard();
-      toast((t.name || t.host) + ' removed from this browser.', { kind: 'ok' });
+      toast(trackerDisplayName(t) + ' removed from this browser.', { kind: 'ok' });
     });
     GM_registerMenuCommand('Sherlock: Settings', openSettings);
   }
@@ -3158,7 +4480,7 @@
       tracker.shortName = shortNameOf(tracker.name);
       await push(tracker, { stats: data.stats });
       saveTracker(tracker);
-      toast(tracker.name + ' was detected and added automatically.', {
+      toast(trackerDisplayName(tracker) + ' was detected and added automatically.', {
         kind: 'ok', ttl: 10000,
         actions: store.url ? [{ label: 'Open Sherlock dashboard', href: store.url + '/dashboard' }] : [],
       });
