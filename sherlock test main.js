@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.3
+// @version      1.7.4
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.3';
+  const VERSION = '1.7.4';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3251,6 +3251,13 @@
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
 
+    // AnimeBytes is NOT a stock Gazelle JSON tracker. Its /ajax.php endpoint
+    // returns HTML; use the same signed-in profile-page fallback as the older
+    // working Sherlock reader instead of locking it to the Gazelle adapter.
+    const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    if (hostname === 'animebytes.tv' || hostname.endsWith('.animebytes.tv') ||
+        (savedIdentity && savedIdentity.name === 'AnimeBytes')) return null;
+
     // Keep dedicated adapters ahead of generic engine detection.
     if (isCinematikHost(hostname)) return 'unit3d';
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
@@ -3347,7 +3354,15 @@
     if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return complete(readCinemageddon(tracker, { origin, request, document: sourceDocument, pageUrl }));
 
     const si = !!tracker.si;
-    const kinds = tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile'];
+    const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
+    const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
+    const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
+      !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
+    // Old saved AnimeBytes records may already say "gazelle". Still allow the
+    // authenticated profile reader after its non-stock /ajax.php endpoint fails.
+    const kinds = isAnimeBytes
+      ? (tracker.kind === 'profile' ? ['profile'] : ['gazelle', 'profile'])
+      : (tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile']);
     let lastError;
     for (const kind of kinds) {
       try {
