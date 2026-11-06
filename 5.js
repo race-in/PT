@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.6
+// @version      1.10.7
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/5.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.6';
+  const VERSION = '1.10.7';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5329,8 +5329,12 @@
     const uploadedCard = cards.find((card) => labelOf(card) === 'total uploaded');
     if (!bufferCard || !uploadedCard) return null;
 
-    summarySection.classList.remove('sm:grid-cols-3', 'lg:grid-cols-3');
-    summarySection.classList.add('sm:grid-cols-2', 'lg:grid-cols-4', 'w-full');
+    summarySection.classList.remove('sm:grid-cols-2','sm:grid-cols-3','md:grid-cols-2','md:grid-cols-3','lg:grid-cols-2','lg:grid-cols-3','lg:grid-cols-4','xl:grid-cols-3','xl:grid-cols-4');
+    summarySection.classList.add('w-full','items-stretch');
+    summarySection.style.display='grid';
+    summarySection.style.gridTemplateColumns='repeat(5,minmax(0,1fr))';
+    summarySection.style.gridAutoRows='minmax(96px,auto)';
+    summarySection.style.width='100%';
     cards.forEach((card) => {
       card.classList.add('h-full', 'min-w-0');
     });
@@ -5420,46 +5424,66 @@
         summaryLabel(candidate) === 'uploaded, last 24 hours'
       );
 
+      // Rebuild an incomplete/blank prior clone using the known-good Total Uploaded structure.
+      if (uploaded24Card &&
+          (!uploaded24Card.querySelector('.eyebrow') || !uploaded24Card.querySelector('.num'))) {
+        uploaded24Card.remove();
+        uploaded24Card = null;
+      }
       if (!uploaded24Card) {
-        uploaded24Card = card.cloneNode(true);
+        const totalUploadedCard = Array.from(summarySection.children).find((candidate) =>
+          summaryLabel(candidate) === 'total uploaded'
+        );
+        if (!totalUploadedCard) return null;
+        uploaded24Card = totalUploadedCard.cloneNode(true);
         uploaded24Card.dataset.sherlock24hUploadedCard = 'true';
-        const label = uploaded24Card.querySelector('.eyebrow');
-        const value = uploaded24Card.querySelector('.num');
-        if (label) label.textContent = 'Uploaded, last 24 hours';
-        if (value) {
-          value.textContent = 'Collecting';
-          value.removeAttribute('title');
-          value.removeAttribute('aria-label');
-          delete value.dataset.sherlockNativeBytes;
-          delete value.dataset.sherlockLastOutputTitle;
-          delete value.dataset.sherlock24hCoverage;
-          delete value.dataset.sherlock24hUploaded;
-          delete value.dataset.sherlock24hDownloaded;
-        }
-        delete uploaded24Card.dataset.sherlockTotalDownloaded;
-      } else {
-        uploaded24Card.dataset.sherlock24hUploadedCard = 'true';
-        const label = uploaded24Card.querySelector('.eyebrow');
-        if (label) label.textContent = 'Uploaded, last 24 hours';
+        uploaded24Card.removeAttribute('id');
+        uploaded24Card.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
       }
 
-      // Insert the upload card directly before the existing 24-hour buffer card.
-      if (uploaded24Card.parentNode !== summarySection || uploaded24Card.nextElementSibling !== card) {
-        summarySection.insertBefore(uploaded24Card, card);
+      uploaded24Card.dataset.sherlock24hUploadedCard = 'true';
+      const uploadLabel = uploaded24Card.querySelector('.eyebrow');
+      const uploadValue = uploaded24Card.querySelector('.num');
+      if (uploadLabel) uploadLabel.textContent = 'Uploaded, last 24 hours';
+      if (uploadValue) {
+        uploadValue.textContent = 'Collecting';
+        uploadValue.removeAttribute('title');
+        uploadValue.removeAttribute('aria-label');
+        delete uploadValue.dataset.sherlockNativeBytes;
+        delete uploadValue.dataset.sherlockLastOutputTitle;
+        delete uploadValue.dataset.sherlock24hCoverage;
+        delete uploadValue.dataset.sherlock24hUploaded;
+        delete uploadValue.dataset.sherlock24hDownloaded;
       }
+      delete uploaded24Card.dataset.sherlockTotalDownloaded;
 
       const bufferLabel = card.querySelector('.eyebrow');
       if (bufferLabel) bufferLabel.textContent = 'Buffer, last 24 hours';
 
-      summarySection.classList.remove(
-        'lg:grid-cols-3', 'lg:grid-cols-4', 'xl:grid-cols-3', 'xl:grid-cols-4'
-      );
-      summarySection.classList.add('sm:grid-cols-2', 'lg:grid-cols-5', 'w-full', 'items-stretch');
-      Array.from(summarySection.children)
-        .filter((item) => item.classList.contains('card'))
-        .forEach((item) => item.classList.add('h-full', 'min-w-0'));
-      uploaded24Card.classList.add('h-full', 'min-w-0');
-      card.classList.add('h-full', 'min-w-0');
+      // Deterministic order: five equal cards, side by side on desktop.
+      const ordered = [
+        Array.from(summarySection.children).find((item) =>
+          /^total buffer(?: at required ratio)?$/.test(summaryLabel(item))),
+        Array.from(summarySection.children).find((item) =>
+          summaryLabel(item) === 'total uploaded'),
+        Array.from(summarySection.children).find((item) =>
+          summaryLabel(item) === 'total downloaded'),
+        uploaded24Card,
+        card,
+      ].filter(Boolean);
+      ordered.forEach((item) => summarySection.appendChild(item));
+
+      summarySection.classList.remove('sm:grid-cols-2','sm:grid-cols-3','md:grid-cols-2','md:grid-cols-3','lg:grid-cols-2','lg:grid-cols-3','lg:grid-cols-4','xl:grid-cols-3','xl:grid-cols-4');
+      summarySection.classList.add('w-full','items-stretch');
+      summarySection.style.display='grid';
+      summarySection.style.gridTemplateColumns='repeat(5,minmax(0,1fr))';
+      summarySection.style.gridAutoRows='minmax(96px,auto)';
+      summarySection.style.width='100%';
+      ordered.forEach((item) => {
+        item.classList.add('h-full','min-w-0');
+        item.style.width='100%';
+        item.style.minWidth='0';
+      });
     }
 
     const uploaded24Value = uploaded24Card && uploaded24Card.querySelector('.num');
@@ -5834,10 +5858,13 @@
     // Expand the summary and native tracker cards to five aligned metrics.
     const bufferBasis = updateDashboardTotals(trackers) || 'one_to_one';
     const dashboardMain = document.querySelector('main') || document.querySelector('#main') || document.body;
-    // Keep Sherlock's original centered max-width dashboard area.
-    // The summary row and tracker grid share this same centered width.
-    dashboardMain.classList.remove('w-full', 'max-w-none');
-    dashboardMain.classList.add('mx-auto', 'max-w-6xl');
+    // Use the full dashboard content width so five cards fit across one row.
+    dashboardMain.classList.remove('max-w-6xl','max-w-5xl','max-w-7xl','mx-auto');
+    dashboardMain.classList.add('w-full','max-w-none');
+    dashboardMain.style.width = '100%';
+    dashboardMain.style.maxWidth = 'none';
+    dashboardMain.style.marginLeft = '0';
+    dashboardMain.style.marginRight = '0';
     Array.from(dashboardMain.querySelectorAll('a.card[href^="/trackers/"]'))
       .filter((card) => !card.hasAttribute('data-sherlock-custom-host'))
       .forEach(ensureNativeDownloadedField);
@@ -5898,9 +5925,12 @@
     // Three metrics only: Buffer, Ratio and Downloaded; Uploaded remains in the sidebar above.
     const section = h('section', {
       id: 'sherlock-local-trackers',
-      class: 'mt-6 grid w-full items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-5',
+      class: 'mt-6 grid w-full items-stretch gap-3',
       'aria-label': 'Custom trackers',
     });
+    section.style.display = 'grid';
+    section.style.gridTemplateColumns = 'repeat(5,minmax(0,1fr))';
+    section.style.width = '100%';
 
     trackers.forEach((tracker) => {
       const stats = tracker.stats || {};
@@ -5987,10 +6017,18 @@
     const nativeSection = nativeGrid || (nativeTrackerCards[0] && nativeTrackerCards[0].parentElement);
 
     if (nativeSection && nativeSection.classList.contains('grid')) {
-      // Keep the native tracker grid aligned with the five-card summary row.
-      nativeSection.classList.remove('lg:grid-cols-3', 'lg:grid-cols-4', 'xl:grid-cols-3', 'xl:grid-cols-4');
-      nativeSection.classList.add('sm:grid-cols-2', 'lg:grid-cols-5', 'w-full', 'items-stretch');
-      nativeTrackerCards.forEach((card) => card.classList.add('h-full', 'min-w-0'));
+      // Native and custom tracker cards share the same five equal columns.
+      nativeSection.classList.remove('sm:grid-cols-2','sm:grid-cols-3','md:grid-cols-2','md:grid-cols-3','lg:grid-cols-2','lg:grid-cols-3','lg:grid-cols-4','xl:grid-cols-3','xl:grid-cols-4');
+      nativeSection.classList.add('w-full','items-stretch');
+      nativeSection.style.display = 'grid';
+      nativeSection.style.gridTemplateColumns = 'repeat(5,minmax(0,1fr))';
+      nativeSection.style.width = '100%';
+      nativeSection.style.maxWidth = 'none';
+      nativeTrackerCards.forEach((card) => {
+        card.classList.add('h-full','min-w-0');
+        card.style.width = '100%';
+        card.style.minWidth = '0';
+      });
       // Mix custom cards into the same native grid so they look exactly like built-in trackers.
       nativeSection.append(...Array.from(section.children));
       section.remove();
