@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.2
+// @version      1.6.3
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -714,7 +714,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.2';
+  const VERSION = '1.6.3';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2599,8 +2599,13 @@
   function ensureNativeDownloadedField(card) {
     const dl = card && card.querySelector('dl');
     if (!dl) return null;
-    dl.classList.remove('grid-cols-3');
-    dl.classList.add('grid-cols-4');
+    // 24h is omitted from tracker cards to keep only three useful metrics.
+    Array.from(dl.children).forEach((field) => {
+      const label = field.querySelector('dt');
+      if (label && /^24h$/i.test((label.textContent || '').trim())) field.remove();
+    });
+    dl.classList.remove('grid-cols-4');
+    dl.classList.add('grid-cols-3');
 
     let field = dl.querySelector('[data-sherlock-native-downloaded]');
     if (!field) {
@@ -2734,10 +2739,10 @@
     // Expand the summary and native tracker cards to four metrics.
     const bufferBasis = updateDashboardTotals(trackers) || 'one_to_one';
     const dashboardMain = document.querySelector('main') || document.querySelector('#main') || document.body;
-    // Sherlock's centered max-width container left unused space on wide monitors.
-    // Keep native padding but let the dashboard use the full content area beside the sidebar.
-    dashboardMain.classList.remove('mx-auto', 'max-w-6xl');
-    dashboardMain.classList.add('w-full', 'max-w-none');
+    // Keep Sherlock's original centered max-width dashboard area.
+    // The summary row and tracker grid share this same centered width.
+    dashboardMain.classList.remove('w-full', 'max-w-none');
+    dashboardMain.classList.add('mx-auto', 'max-w-6xl');
     Array.from(dashboardMain.querySelectorAll('a.card[href^="/trackers/"]'))
       .filter((card) => !card.hasAttribute('data-sherlock-custom-host'))
       .forEach(ensureNativeDownloadedField);
@@ -2798,7 +2803,7 @@
     // Four metrics: Buffer, Ratio, Downloaded and 24h; Uploaded remains in the sidebar above.
     const section = h('section', {
       id: 'sherlock-local-trackers',
-      class: 'mt-6 grid w-full items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3',
+      class: 'mt-6 grid w-full items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4',
       'aria-label': 'Custom trackers',
     });
 
@@ -2808,11 +2813,6 @@
       const downloaded = stats.downloaded === null || stats.downloaded === undefined ? null : Number(stats.downloaded);
       const buffer = customTrackerBuffer(stats, bufferBasis);
       const history = Array.isArray(tracker.history) ? tracker.history : [];
-      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-      const old = history
-        .filter((point) => Number(point.at) <= dayAgo && Number.isFinite(Number(point.buffer)))
-        .slice(-1)[0];
-      const delta24 = old && buffer !== null ? buffer - Number(old.buffer) : null;
 
       const logo = tracker.logo
         ? h('img', {
@@ -2843,7 +2843,7 @@
           }, tracker.name || tracker.host),
           status
         ),
-        h('dl', { class: 'mt-4 grid grid-cols-4 gap-2 text-sm' },
+        h('dl', { class: 'mt-4 grid grid-cols-3 gap-3 text-sm' },
           h('div', {},
             h('dt', { class: 'eyebrow' }, 'Buffer'),
             h('dd', { class: 'mt-1' },
@@ -2863,12 +2863,6 @@
             h('dt', { class: 'eyebrow' }, 'Downloaded'),
             h('dd', { class: 'mt-1' },
               h('span', { class: 'num' }, localBytes(downloaded))
-            )
-          ),
-          h('div', {},
-            h('dt', { class: 'eyebrow' }, '24h'),
-            h('dd', { class: 'mt-1' },
-              h('span', { class: 'num' + (delta24 === null || delta24 === 0 ? ' text-muted' : '') }, signedBytes(delta24))
             )
           )
         ),
@@ -2894,6 +2888,10 @@
     const nativeSection = nativeGrid || (nativeTrackerCards[0] && nativeTrackerCards[0].parentElement);
 
     if (nativeSection && nativeSection.classList.contains('grid')) {
+      // Keep the native tracker grid aligned with the four-card summary row.
+      nativeSection.classList.remove('lg:grid-cols-3');
+      nativeSection.classList.add('sm:grid-cols-2', 'lg:grid-cols-4', 'w-full', 'items-stretch');
+      nativeTrackerCards.forEach((card) => card.classList.add('h-full', 'min-w-0'));
       // Mix custom cards into the same native grid so they look exactly like built-in trackers.
       nativeSection.append(...Array.from(section.children));
       section.remove();
