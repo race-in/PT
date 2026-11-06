@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.1
+// @version      1.6.2
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -714,7 +714,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.1';
+  const VERSION = '1.6.2';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2523,6 +2523,8 @@
     } else {
       downloadedCard.dataset.sherlockTotalDownloaded = 'true';
     }
+    // The fourth card must share the exact same sizing rules as the original three.
+    downloadedCard.classList.add('h-full', 'min-w-0');
 
     const bufferBasis = /at required ratio$/.test(labelOf(bufferCard)) ? 'required_ratio' : 'one_to_one';
     const nativeBuffer = readNativeMetricBytes(bufferCard);
