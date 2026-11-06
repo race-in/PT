@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.7
+// @version      1.9.8
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1710,7 +1710,8 @@
     if (!payload || typeof payload !== 'object') return null;
     const code = String(payload.code ?? '').toUpperCase();
     const message = String(payload.message || '').toUpperCase();
-    if (code && code !== '0' && code !== 'SUCCESS' && message !== 'SUCCESS') return null;
+    if (code && !['0', '200', 'SUCCESS'].includes(code)) return null;
+    if (!code && message && message !== 'SUCCESS') return null;
     const user = payload.data && typeof payload.data === 'object' ? payload.data : null;
     const counts = user && (user.memberCount || user.member_count || user.count);
     if (!user || !counts || user.id === null || user.id === undefined) return null;
@@ -2261,7 +2262,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.7';
+  const VERSION = '1.9.8';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
