@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.9
+// @version      1.10.0
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1482,6 +1482,7 @@
     const matches = (fn) => hosts.some((value) => fn(value));
     if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isKaragargaHost)) return 'Karagarga';
+    if (matches(isBeyondHDHost) || isBeyondHDDocument(doc)) return 'BeyondHD';
     if (matches(isMTeamHost)) return 'M-Team';
     if (matches(isBlutopiaHost)) return 'Blutopia';
     if (matches(isDesiGaaneHost)) return 'DesiGaane';
@@ -2068,6 +2069,21 @@
       host === 'm-team.io' || host.endsWith('.m-team.io');
   }
 
+  // BeyondHD is a Laravel/F3NIX tracker, not UNIT3D or Gazelle.
+  function isBeyondHDHost(value) {
+    const host = trackerHostname(value);
+    return host === 'beyond-hd.me' || host.endsWith('.beyond-hd.me');
+  }
+
+  function isBeyondHDDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    const baseMeta = doc.querySelector('meta[name="_base_url"]');
+    const base = baseMeta && (baseMeta.getAttribute('content') || baseMeta.content || '');
+    const hasBhdStats = !!doc.querySelector('#beta-stats') || !!doc.querySelector('.table-details');
+    return /beyond-hd\.me/i.test(String(base)) ||
+      (/beyond\s*-?\s*hd/i.test(String(doc.title || '')) && hasBhdStats);
+  }
+
   // Exact production API bases exposed by the M-Team frontend bootstrap HTML.
   // Each base already includes /api; callers append only the endpoint path.
   const MTEAM_API_BASES = Object.freeze([
@@ -2259,7 +2275,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2268,7 +2284,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.9';
+  const VERSION = '1.10.0';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3482,8 +3498,10 @@
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
 
-    // M-Team uses its custom mTorrent API and requires a token from Control Panel → Lab.
+    // BeyondHD exposes account totals in its Laravel/F3NIX navbar and member profile.
     const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    if (isBeyondHDHost(hostname) || (savedIdentity && savedIdentity.name === 'BeyondHD')) return 'beyondhd';
+    // M-Team uses its custom mTorrent API and requires a token from Control Panel → Lab.
     if (isMTeamHost(hostname) || (savedIdentity && savedIdentity.name === 'M-Team')) return 'mteam';
     // AnimeBytes is NOT a stock Gazelle JSON tracker. Its /ajax.php endpoint
     // returns HTML; use the same signed-in profile-page fallback as the older
@@ -3872,6 +3890,169 @@
     return readPolishTrackerApi(tracker, apiKey);
   }
 
+  function beyondHDRow(doc, wantedLabel) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    const wanted = String(wantedLabel || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    for (const row of doc.querySelectorAll('.table-details tr')) {
+      const cells = Array.from(row.querySelectorAll('td'));
+      if (cells.length < 2) continue;
+      const label = String(cells[0].textContent || '').replace(/\s+/g, ' ').trim().replace(/:$/, '').toLowerCase();
+      if (label === wanted) return { row, label: cells[0], value: cells[1] };
+    }
+    return null;
+  }
+
+  function beyondHDHeaderValue(doc, title) {
+    if (!doc || typeof doc.querySelector !== 'function') return '';
+    const node = doc.querySelector('#beta-stats a[title="My ' + title + '"]');
+    return node ? String(node.textContent || '').replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function parseBeyondHDStats(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    // Prefer exact credited totals, not rounded navbar, real upload, bonus upload, or capped upload.
+    const uploadedCredit = doc.querySelector('.table-details span[title="Credited Upload"]');
+    const downloadedCredit = doc.querySelector('.table-details span[title="Credited Download"]');
+    const uploadedText = uploadedCredit && uploadedCredit.textContent || beyondHDHeaderValue(doc, 'Uploads');
+    const downloadedText = downloadedCredit && downloadedCredit.textContent || beyondHDHeaderValue(doc, 'Downloads');
+    const uploaded = parseBytes(uploadedText, false);
+    const downloaded = parseBytes(downloadedText, false);
+    if (uploaded === null || downloaded === null) return null;
+
+    const stats = { uploaded, downloaded };
+    // First Ratio badge = credited share ratio; second = required ratio.
+    // "Real Ratio" is intentionally ignored.
+    const ratioRow = beyondHDRow(doc, 'Ratio');
+    const ratioBadges = ratioRow ? Array.from(ratioRow.value.querySelectorAll('.badge-user')) : [];
+    const rowRatio = ratioBadges.length ? parseRatio(ratioBadges[0].textContent || '') : null;
+    const headerRatio = parseRatio(beyondHDHeaderValue(doc, 'Ratio'));
+    const chosenRatio = rowRatio && !rowRatio.infinite ? rowRatio : headerRatio;
+    stats.ratio = chosenRatio && !chosenRatio.infinite ? chosenRatio.value : apiRatio(uploaded, downloaded);
+    if (ratioBadges.length > 1) {
+      const required = parseRatio(ratioBadges[1].textContent || '');
+      if (required && !required.infinite) stats.required_ratio = required.value;
+    }
+
+    const bufferRow = beyondHDRow(doc, 'Buffer');
+    if (bufferRow) {
+      const badges = Array.from(bufferRow.value.querySelectorAll('.badge-user'));
+      if (badges.length) {
+        const buffer = parseBytes(badges[0].textContent || '', false);
+        if (buffer !== null) stats.buffer = buffer;
+        if (badges.length > 1) {
+          const classBuffer = parseBytes(badges[1].textContent || '', false);
+          if (classBuffer !== null) stats.required_class_buffer = classBuffer;
+        }
+      }
+    }
+
+    const bonus = apiOptionalNumber(parseLocaleNumber(beyondHDHeaderValue(doc, 'Bonus Points')));
+    if (bonus !== null) stats.bonus_points = bonus;
+    const hnr = parseCount(beyondHDHeaderValue(doc, 'HnRs'));
+    if (hnr !== null) stats.hit_and_runs = hnr;
+    const seeding = parseCount(beyondHDHeaderValue(doc, 'Seeding'));
+    if (seeding !== null) stats.seeding = seeding;
+    const leeching = parseCount(beyondHDHeaderValue(doc, 'Leeching'));
+    if (leeching !== null) stats.leeching = leeching;
+
+    const torrentRow = beyondHDRow(doc, 'Torrents');
+    if (torrentRow) {
+      for (const badge of torrentRow.value.querySelectorAll('.badge-user')) {
+        const match = String(badge.textContent || '').match(/Snatches\s*:\s*([\d,.'’ ]+)/i);
+        if (match) {
+          const count = parseCount(match[1]);
+          if (count !== null) { stats.snatched = count; break; }
+        }
+      }
+    }
+
+    const classNode = doc.querySelector('.bhd-profile [title="Class"]') ||
+      doc.querySelector('span[title="Class"]');
+    if (classNode) {
+      const value = String(classNode.textContent || '').replace(/\s+/g, ' ').trim();
+      if (value) stats.user_class = value;
+    }
+    return stats;
+  }
+
+  function beyondHDIdentity(doc, origin, pageUrl) {
+    const link = doc && doc.querySelector
+      ? (doc.querySelector('#beta-userbar .dropmenu > a[href*="/users/"]') ||
+         doc.querySelector('#beta-userbar a[href*="/users/"]') ||
+         doc.querySelector('a[href*="/users/"]'))
+      : null;
+    const href = link && (link.getAttribute('href') || link.href) || '';
+    let profileUrl = null, username = '', userId = '';
+    if (href) {
+      try {
+        const url = new URL(href, origin);
+        if (url.origin === new URL(origin).origin && /\/users?\//i.test(url.pathname)) {
+          profileUrl = url.href;
+          const slug = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '');
+          const idMatch = slug.match(/\.(\d+)$/) || slug.match(/^(\d+)$/);
+          userId = idMatch ? idMatch[1] : '';
+          const image = link.querySelector && link.querySelector('img');
+          username = String(
+            (image && (image.getAttribute('alt') || image.alt || image.getAttribute('title') || image.title)) ||
+            (link.getAttribute('title') || link.title) || link.textContent || ''
+          ).replace(/\s+/g, ' ').trim();
+          if (!username) username = slug.replace(/\.\d+$/, '');
+        }
+      } catch (e) { /* optional malformed profile link */ }
+    }
+    if (!profileUrl && pageUrl) {
+      try {
+        const current = new URL(pageUrl, origin);
+        if (current.origin === new URL(origin).origin && /\/users?\//i.test(current.pathname)) profileUrl = current.href;
+      } catch (e) { /* optional current-page fallback */ }
+    }
+    return { profileUrl, username, userId };
+  }
+
+  async function readBeyondHD(tracker, context) {
+    context = context || {};
+    const origin = context.origin || tracker.origin || ('https://' + tracker.host);
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    let statsDocument = sourceDocument;
+    let stats = parseBeyondHDStats(statsDocument);
+
+    if (!stats) {
+      const home = await request(new URL('/', origin).href, 'text/html');
+      if (home.redirected && /\/(?:login|signin)(?:\/|$)/i.test(home.url || '')) {
+        throw new ReadError('BeyondHD session expired. Sign in again and retry.');
+      }
+      statsDocument = new DOMParser().parseFromString(home.text, 'text/html');
+      stats = parseBeyondHDStats(statsDocument);
+    }
+    if (!stats) {
+      throw new ReadError('BeyondHD did not expose Credited Upload and Credited Download in #beta-stats or the .table-details profile table.');
+    }
+
+    const currentIdentity = beyondHDIdentity(sourceDocument, origin, pageUrl);
+    const homeIdentity = statsDocument !== sourceDocument
+      ? beyondHDIdentity(statsDocument, origin, origin + '/')
+      : {};
+    const identity = {
+      profileUrl: currentIdentity.profileUrl || homeIdentity.profileUrl,
+      username: currentIdentity.username || homeIdentity.username,
+      userId: currentIdentity.userId || homeIdentity.userId,
+    };
+    const username = identity.username || tracker.username || tracker.userId || '';
+    const userId = identity.userId || tracker.userId || '';
+    if (!username && !userId) {
+      throw new ReadError('BeyondHD account stats were found, but the signed-in username/profile link could not be identified.');
+    }
+    return {
+      kind: 'beyondhd',
+      userId,
+      username,
+      profileUrl: identity.profileUrl || tracker.profileUrl || null,
+      stats,
+    };
+  }
+
   async function readMTeam(tracker, context) {
     context = context || {};
     const origin = context.origin || tracker.origin || ('https://' + tracker.host);
@@ -3998,6 +4179,10 @@
       !!(trackerIdentity && trackerIdentity.name === 'PolishTracker') ||
       trackerNameKey === 'polishtracker' || trackerShortKey === 'PT' ||
       isPolishTrackerDocument(sourceDocument);
+    const isBeyondHD = isBeyondHDHost(trackerHost) ||
+      !!(trackerIdentity && trackerIdentity.name === 'BeyondHD') ||
+      trackerNameKey === 'beyondhd' || trackerShortKey === 'BHD' ||
+      isBeyondHDDocument(sourceDocument);
     const isMTeam = isMTeamHost(trackerHost) ||
       !!(trackerIdentity && trackerIdentity.name === 'M-Team') ||
       trackerNameKey === 'mteam' || trackerShortKey === 'M-TEAM';
@@ -4010,6 +4195,9 @@
     const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
+
+    // BeyondHD account totals come from its authenticated Laravel/F3NIX HTML.
+    if (isBeyondHD) return readBeyondHD(tracker, { origin, request, document: sourceDocument, pageUrl });
 
     // M-Team mTorrent statistics come from its token-authenticated member API.
     if (isMTeam) return readMTeam(tracker, { origin });
@@ -5404,6 +5592,20 @@
   }
 
   function looksLikeTracker() {
+    if (isBeyondHDHost(PAGE_HOST) || isBeyondHDDocument(document)) {
+      if (document.querySelector('input[type="password"]') ||
+          /\/(?:login|logout|register|signup)(?:\/|$)/i.test(location.pathname)) return false;
+      if (!parseBeyondHDStats(document)) return false;
+      const versionKey = 'sherlock.beyondhd.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
+
     if (isMTeamHost(PAGE_HOST)) {
       if (document.querySelector('input[type="password"]') ||
           /\/(?:login|signin|auth)(?:\/|$)/i.test(location.pathname)) return false;
