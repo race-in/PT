@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.1
+// @version      1.10.2
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1482,6 +1482,7 @@
     const matches = (fn) => hosts.some((value) => fn(value));
     if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isKaragargaHost)) return 'Karagarga';
+    if (matches(isSceneHDHost) || isSceneHDDocument(doc)) return 'SceneHD';
     if (matches(isBeyondHDHost) || isBeyondHDDocument(doc)) return 'BeyondHD';
     if (matches(isMTeamHost)) return 'M-Team';
     if (matches(isBlutopiaHost)) return 'Blutopia';
@@ -2073,6 +2074,167 @@
     return host === 'karagarga.in' || host.endsWith('.karagarga.in');
   }
 
+  // SceneHD uses a legacy userdetails.php profile.
+  function isSceneHDHost(value) {
+    const host = trackerHostname(value);
+    return host === 'scenehd.org' || host.endsWith('.scenehd.org');
+  }
+
+  function isSceneHDProfileDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return /^SceneHD\s*::\s*Details for\b/i.test(String(doc.title || '')) ||
+      (!!doc.querySelector('#maindetailsblock #stats') && !!doc.querySelector('#header h1'));
+  }
+
+  function isSceneHDDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return /SceneHD/i.test(String(doc.title || '')) &&
+      (!!doc.querySelector('#statusbar #user-information') ||
+       !!doc.querySelector('#maindetailsblock #stats'));
+  }
+
+  function sceneHDOwnProfileLink(doc, origin) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const anchor = doc.querySelector('#statusbar #user-information a[href*="userdetails.php?id="]') ||
+      doc.querySelector('#user-information a[href*="userdetails.php?id="]');
+    if (!anchor) return null;
+    const href = anchor.getAttribute('href') || anchor.href || '';
+    if (!href) return null;
+    try {
+      const base = new URL(origin || 'https://scenehd.org').origin;
+      const url = new URL(href, base);
+      if (url.origin !== base || !/\/userdetails\.php$/i.test(url.pathname) ||
+          !url.searchParams.get('id')) return null;
+      return {
+        url: url.href,
+        text: String(anchor.textContent || '').replace(/\s+/g, ' ').trim(),
+        userId: url.searchParams.get('id'),
+      };
+    } catch (e) { return null; }
+  }
+
+  function parseSceneHDProfileStats(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const root = doc.querySelector('#stats');
+    if (!root || typeof root.querySelectorAll !== 'function') return null;
+    const stats = {};
+    for (const row of root.querySelectorAll('table tr')) {
+      const cells = Array.from(row.querySelectorAll('td'));
+      if (cells.length < 2) continue;
+      const labelNode = row.querySelector('td.rowhead') || cells[0];
+      const label = String(labelNode.textContent || '').replace(/\s+/g, ' ').trim().replace(/:$/, '').toLowerCase();
+      const value = String(cells[1].textContent || '').replace(/\s+/g, ' ').trim();
+      if (!label || !value) continue;
+
+      if (label === 'downloaded') {
+        const bytes = parseBytes(value, false);
+        if (bytes !== null) stats.downloaded = bytes;
+      } else if (label === 'uploaded') {
+        // The first value is the primary credited total; parentheses are an idle-bonus note.
+        const bytes = parseBytes(value, false);
+        if (bytes !== null) stats.uploaded = bytes;
+      } else if (/^ratio\s*\/\s*required$/.test(label)) {
+        const values = value.match(/[\d]+(?:[.,][\d]+)*/g) || [];
+        const ratio = values.length ? parseLocaleNumber(values[0]) : null;
+        const required = values.length > 1 ? parseLocaleNumber(values[1]) : null;
+        if (ratio !== null && ratio >= 0) stats.ratio = ratio;
+        if (required !== null && required >= 0) stats.required_ratio = required;
+      } else if (label === 'ratio') {
+        const ratio = parseRatio(value);
+        if (ratio && !ratio.infinite) stats.ratio = ratio.value;
+      } else if (label === 'buffer') {
+        const bytes = parseBytes(value, false);
+        if (bytes !== null) stats.buffer = bytes;
+      } else if (label === 'points' || label === 'bonus') {
+        const match = value.match(/[\d]+(?:[.,][\d]+)*/);
+        const points = match ? parseLocaleNumber(match[0]) : null;
+        if (points !== null) stats.bonus_points = points;
+      }
+    }
+    const classNode = doc.querySelector('#header h1 sup');
+    if (classNode) {
+      const userClass = String(classNode.textContent || '').replace(/\s+/g, ' ').trim();
+      if (userClass) stats.user_class = userClass;
+    }
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) return null;
+    if (!Number.isFinite(stats.ratio)) stats.ratio = apiRatio(stats.uploaded, stats.downloaded);
+    return stats;
+  }
+
+  async function readSceneHD(tracker, context) {
+    context = context || {};
+    const origin = context.origin || tracker.origin || ('https://' + tracker.host);
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    let profileUrl = tracker.profileUrl || null;
+    let stats = parseSceneHDProfileStats(sourceDocument);
+    let identityDocument = sourceDocument;
+    let ownLink = sceneHDOwnProfileLink(sourceDocument, origin);
+
+    if (!profileUrl && ownLink) profileUrl = ownLink.url;
+    if (!profileUrl && isSceneHDProfileDocument(sourceDocument)) profileUrl = pageUrl;
+    if (!profileUrl && sourceDocument) {
+      const home = await request(new URL('/', origin).href, 'text/html');
+      if (home.redirected && /(?:login|signin)/i.test(home.url || '')) {
+        throw new ReadError('SceneHD session expired. Sign in again and retry.');
+      }
+      identityDocument = new DOMParser().parseFromString(home.text, 'text/html');
+      ownLink = sceneHDOwnProfileLink(identityDocument, origin);
+      if (!ownLink) throw new ReadError('Could not find your own SceneHD userdetails.php link in the status bar.');
+      profileUrl = ownLink.url;
+    }
+    if (!profileUrl) {
+      const home = await request(new URL('/', origin).href, 'text/html');
+      if (home.redirected && /(?:login|signin)/i.test(home.url || '')) {
+        throw new ReadError('SceneHD session expired. Sign in again and retry.');
+      }
+      identityDocument = new DOMParser().parseFromString(home.text, 'text/html');
+      ownLink = sceneHDOwnProfileLink(identityDocument, origin);
+      if (!ownLink) throw new ReadError('Could not find your own SceneHD userdetails.php link in the status bar.');
+      profileUrl = ownLink.url;
+    }
+
+    // A saved/manual profile address must remain on the authenticated SceneHD origin.
+    try {
+      const checked = new URL(profileUrl, origin);
+      if (checked.origin !== new URL(origin).origin ||
+          !/\/userdetails\.php$/i.test(checked.pathname) || !checked.searchParams.get('id')) {
+        throw new ReadError('The saved SceneHD profile address is not a valid same-site userdetails.php URL.');
+      }
+      profileUrl = checked.href;
+    } catch (e) {
+      if (e instanceof ReadError) throw e;
+      throw new ReadError('The saved SceneHD profile address could not be validated.');
+    }
+
+    if (!stats) {
+      const response = await request(profileUrl, 'text/html');
+      const finalUrl = response.url || profileUrl;
+      const finalPath = new URL(finalUrl, origin).pathname;
+      if ((response.redirected && /(?:login|signin)/i.test(finalUrl)) ||
+          /\/(?:login|signin)(?:\.php|\/|$)/i.test(finalPath)) {
+        throw new ReadError('SceneHD session expired. Sign in again and retry.');
+      }
+      identityDocument = new DOMParser().parseFromString(response.text, 'text/html');
+      stats = parseSceneHDProfileStats(identityDocument);
+      if (!stats) throw new ReadError('SceneHD profile did not contain Uploaded and Downloaded in the #stats section.');
+    }
+
+    const profileLink = sceneHDOwnProfileLink(identityDocument, origin) ||
+      sceneHDOwnProfileLink(sourceDocument, origin);
+    const parsedProfile = new URL(profileUrl, origin);
+    const userId = (profileLink && profileLink.userId) || parsedProfile.searchParams.get('id') || tracker.userId || '';
+    const titleMatch = String(identityDocument && identityDocument.title || '')
+      .match(/SceneHD\s*::\s*Details for\s+(.+)$/i);
+    const username = (titleMatch && titleMatch[1].trim()) ||
+      (profileLink && profileLink.text) || tracker.username || userId;
+    if (!username && !userId) {
+      throw new ReadError('SceneHD account statistics were found, but your profile identity could not be verified.');
+    }
+    return { kind: 'scenehd', userId: userId || '', username: username || '', profileUrl, stats };
+  }
+
   function isMTeamHost(value) {
     const host = trackerHostname(value);
     return host === 'm-team.cc' || host.endsWith('.m-team.cc') ||
@@ -2285,7 +2447,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isSceneHDHost, isSceneHDProfileDocument, isSceneHDDocument, sceneHDOwnProfileLink, parseSceneHDProfileStats, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2294,7 +2456,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.1';
+  const VERSION = '1.10.2';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3508,8 +3670,10 @@
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
 
-    // BeyondHD exposes account totals in its Laravel/F3NIX navbar and member profile.
+    // SceneHD uses its own legacy userdetails.php profile parser.
     const savedIdentity = trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    if (isSceneHDHost(hostname) || (savedIdentity && savedIdentity.name === 'SceneHD')) return 'scenehd';
+    // BeyondHD exposes account totals in its Laravel/F3NIX navbar and member profile.
     if (isBeyondHDHost(hostname) || (savedIdentity && savedIdentity.name === 'BeyondHD')) return 'beyondhd';
     // M-Team uses its custom mTorrent API and requires a token from Control Panel → Lab.
     if (isMTeamHost(hostname) || (savedIdentity && savedIdentity.name === 'M-Team')) return 'mteam';
@@ -4189,6 +4353,10 @@
       !!(trackerIdentity && trackerIdentity.name === 'PolishTracker') ||
       trackerNameKey === 'polishtracker' || trackerShortKey === 'PT' ||
       isPolishTrackerDocument(sourceDocument);
+    const isSceneHD = isSceneHDHost(trackerHost) ||
+      !!(trackerIdentity && trackerIdentity.name === 'SceneHD') ||
+      trackerNameKey === 'scenehd' || trackerShortKey === 'SH' ||
+      isSceneHDDocument(sourceDocument);
     const isBeyondHD = isBeyondHDHost(trackerHost) ||
       !!(trackerIdentity && trackerIdentity.name === 'BeyondHD') ||
       trackerNameKey === 'beyondhd' || trackerShortKey === 'BHD' ||
@@ -4205,6 +4373,9 @@
     const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
+
+    // SceneHD totals come from its authenticated legacy userdetails.php page.
+    if (isSceneHD) return readSceneHD(tracker, { origin, request, document: sourceDocument, pageUrl });
 
     // BeyondHD account totals come from its authenticated Laravel/F3NIX HTML.
     if (isBeyondHD) return readBeyondHD(tracker, { origin, request, document: sourceDocument, pageUrl });
@@ -5602,6 +5773,21 @@
   }
 
   function looksLikeTracker() {
+    if (isSceneHDHost(PAGE_HOST) || isSceneHDDocument(document)) {
+      if (document.querySelector('input[type="password"]') ||
+          /\/(?:login|logout|register|signup)(?:\.php|\/|$)/i.test(location.pathname)) return false;
+      // A public profile alone is insufficient: require the logged-in user's own header link.
+      if (!sceneHDOwnProfileLink(document, location.origin)) return false;
+      const versionKey = 'sherlock.scenehd.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
+
     if (isBeyondHDHost(PAGE_HOST) || isBeyondHDDocument(document)) {
       if (document.querySelector('input[type="password"]') ||
           /\/(?:login|logout|register|signup)(?:\/|$)/i.test(location.pathname)) return false;
