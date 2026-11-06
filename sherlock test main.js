@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.2
+// @version      1.9.3
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.2';
+  const VERSION = '1.9.3';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4481,7 +4481,7 @@
     return bufferBasis;
   }
 
-  function updateDashboard24hBuffer(customTrackers) {
+  function updateDashboard24hBuffer(customTrackers, nativeTrackers) {
     const main = document.querySelector('main') || document.querySelector('#main') || document.body;
     const bufferLabelPattern = /^total buffer(?: at required ratio)?$/;
     const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
@@ -4509,25 +4509,42 @@
     });
     if (!card) return null;
 
-    const nativeBuffer24h = readNativeMetricBytes(card);
-    if (nativeBuffer24h === null) return null;
+    const customTraffic = sumTrackerTraffic24h(customTrackers);
+    const nativeTraffic = sumTrackerTraffic24h(nativeTrackers);
+    const totalTrackers = customTraffic.total + nativeTraffic.total;
+    const readyTrackers = customTraffic.ready + nativeTraffic.ready;
 
-    const traffic = sumTrackerTraffic24h(customTrackers);
-    // Do not publish a partial total as though every enabled tracker were counted.
-    if (!traffic.total || !traffic.complete) return null;
+    // The native Sherlock 24h card can be stale/zero. Recalculate it from the
+    // actual per-tracker cumulative Upload and Download snapshots in this browser.
+    if (!totalTrackers || !customTraffic.complete || !nativeTraffic.complete) {
+      const valueNode = card.querySelector('.num');
+      if (valueNode) {
+        valueNode.dataset.sherlock24hCoverage = readyTrackers + '/' + totalTrackers;
+        valueNode.title = 'Collecting 24-hour upload/download history: ' +
+          readyTrackers + '/' + totalTrackers + ' trackers have a complete window.';
+      }
+      return null;
+    }
 
-    writeDashboardMetric(card, nativeBuffer24h + traffic.buffer);
+    const uploaded = customTraffic.uploaded + nativeTraffic.uploaded;
+    const downloaded = customTraffic.downloaded + nativeTraffic.downloaded;
+    const buffer = uploaded - downloaded;
+    writeDashboardMetric(card, buffer);
+
     const valueNode = card.querySelector('.num');
     if (valueNode) {
-      valueNode.dataset.sherlock24hUploaded = String(Math.round(traffic.uploaded));
-      valueNode.dataset.sherlock24hDownloaded = String(Math.round(traffic.downloaded));
-      valueNode.dataset.sherlock24hCoverage = traffic.ready + '/' + traffic.total;
+      valueNode.dataset.sherlock24hUploaded = String(Math.round(uploaded));
+      valueNode.dataset.sherlock24hDownloaded = String(Math.round(downloaded));
+      valueNode.dataset.sherlock24hCoverage = readyTrackers + '/' + totalTrackers;
       valueNode.setAttribute('aria-label',
-        '24-hour buffer includes ' + localBytes(traffic.uploaded) + ' uploaded minus ' +
-        localBytes(traffic.downloaded) + ' downloaded from all ' +
-        traffic.total + ' enabled browser-local trackers');
+        '24-hour buffer: ' + localBytes(uploaded) + ' uploaded minus ' +
+        localBytes(downloaded) + ' downloaded across ' + totalTrackers + ' trackers');
+      valueNode.title = '24h Upload: ' + localBytes(uploaded) +
+        ' · 24h Download: ' + localBytes(downloaded) +
+        ' · Net Buffer: ' + signedBytes(buffer) +
+        ' · Coverage: ' + readyTrackers + '/' + totalTrackers + ' trackers';
     }
-    return traffic;
+    return { uploaded, downloaded, buffer, ready: readyTrackers, total: totalTrackers, complete: true };
   }
 
 
@@ -4548,9 +4565,86 @@
     catch (_) { return '—'; }
   }
 
-  const nativeDownloadedCache = new Map();
-  let nativeDownloadedCacheAt = 0;
-  let nativeDownloadedFetchPromise = null;
+  const nativeTrafficCache = new Map();
+  let nativeTrafficCacheAt = 0;
+  let nativeTrafficFetchPromise = null;
+  const NATIVE_HISTORY_KEY = 'sherlock.native.tracker.history.v1';
+
+  function getNativeTrackerHistoryStore() {
+    try {
+      const value = JSON.parse(GM_getValue(NATIVE_HISTORY_KEY, '{}')) || {};
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function recordNativeTrackerObservations(rows) {
+    const all = getNativeTrackerHistoryStore();
+    const now = Date.now();
+    const cutoff = now - 8 * 24 * 60 * 60 * 1000;
+    let changed = false;
+
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      if (!row || !row.key ||
+          !Number.isFinite(Number(row.uploaded)) || Number(row.uploaded) < 0 ||
+          !Number.isFinite(Number(row.downloaded)) || Number(row.downloaded) < 0 ||
+          !Number.isFinite(Number(row.at)) || Number(row.at) <= 0) return;
+
+      const history = (Array.isArray(all[row.key]) ? all[row.key] : [])
+        .filter((point) => point &&
+          Number.isFinite(Number(point.at)) && Number(point.at) > 0 &&
+          Number.isFinite(Number(point.uploaded)) && Number(point.uploaded) >= 0 &&
+          Number.isFinite(Number(point.downloaded)) && Number(point.downloaded) >= 0)
+        .sort((a, b) => Number(a.at) - Number(b.at));
+      const last = history[history.length - 1];
+
+      if (!last || Number(row.at) - Number(last.at) >= 5 * 60 * 1000 || Number(row.at) < Number(last.at)) {
+        history.push({
+          at: Number(row.at),
+          uploaded: Number(row.uploaded),
+          downloaded: Number(row.downloaded),
+          buffer: Number(row.uploaded) - Number(row.downloaded),
+        });
+        changed = true;
+      }
+
+      all[row.key] = history.filter((point) => Number(point.at) >= cutoff).slice(-576);
+    });
+
+    // Remove old tracker entries so this GM store remains bounded.
+    Object.keys(all).forEach((key) => {
+      const history = all[key];
+      if (!Array.isArray(history) || !history.length ||
+          Number(history[history.length - 1].at) < cutoff) {
+        delete all[key];
+        changed = true;
+      }
+    });
+
+    if (changed) GM_setValue(NATIVE_HISTORY_KEY, JSON.stringify(all));
+    return all;
+  }
+
+  function nativeTrackerHistoryRecords(rows) {
+    const all = getNativeTrackerHistoryStore();
+    const now = Date.now();
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      const history = row && row.key && Array.isArray(all[row.key]) ? all[row.key] : [];
+      const last = history.length ? history[history.length - 1] : null;
+      // Keep failed/unreadable official trackers in the denominator. A partial
+      // aggregate must never be presented as the complete dashboard total.
+      if (!last || now - Number(last.at) > 60 * 60 * 1000) {
+        return { enabled: true, stats: {}, history: [], lastSync: 0 };
+      }
+      return {
+        enabled: true,
+        stats: { uploaded: Number(last.uploaded), downloaded: Number(last.downloaded) },
+        history,
+        lastSync: Number(last.at),
+      };
+    });
+  }
 
   function removeNativeTrackerFooter(card, dl) {
     if (!card || !dl) return 0;
@@ -4587,11 +4681,26 @@
     });
   }
 
+  function removeNativePerTracker24hField(dl) {
+    if (!dl) return 0;
+    let removed = 0;
+    Array.from(dl.children).forEach((field) => {
+      const label = field.querySelector('dt');
+      const text = String(label && label.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/^(?:24\s*h(?:\s*(?:dl|download(?:ed)?|upload(?:ed)?|buffer))?|last\s*24\s*hours?|24\s*hours?)$/i.test(text)) {
+        field.remove();
+        removed++;
+      }
+    });
+    return removed;
+  }
+
   function ensureNativeDownloadedField(card) {
     const dl = card && card.querySelector('dl');
     if (!dl) return null;
     removeNativeTrackerFooter(card, dl);
-    // Preserve Sherlock's native 24h metric; only add the independently fetched Downloaded value.
+    removeNativePerTracker24hField(dl);
+    // Keep native cards aligned to the same three metrics as custom cards.
     centerTrackerMetrics(dl);
 
     let field = dl.querySelector('[data-sherlock-native-downloaded]');
@@ -4624,7 +4733,7 @@
     valueNode.setAttribute('title', Math.round(Number(bytes)).toLocaleString() + ' bytes');
   }
 
-  async function fetchNativeTrackerDownloaded(card) {
+  async function fetchNativeTrackerTraffic(card) {
     try {
       const href = card && card.getAttribute('href');
       if (!href) return null;
@@ -4651,41 +4760,57 @@
       if (doc.querySelector('input[type="password"]')) return null;
 
       let stats = resolveStats(extractPairs(doc), false);
-      if (stats.downloaded === undefined) {
+      if (stats.uploaded === undefined || stats.downloaded === undefined) {
         stats = Object.assign(stats, resolveStats(pairsFromText(plainText(doc)), false));
       }
+      const uploaded = stats.uploaded;
       const downloaded = stats.downloaded;
-      return Number.isFinite(downloaded) && downloaded >= 0 ? downloaded : null;
+      if (!Number.isFinite(uploaded) || uploaded < 0 ||
+          !Number.isFinite(downloaded) || downloaded < 0) return null;
+      return { uploaded, downloaded };
     } catch (e) {
       return null;
     }
   }
 
-  async function readNativeTrackerDownloads(cards) {
+  async function readNativeTrackerTraffic(cards) {
     const list = Array.isArray(cards) ? cards : [];
     const keys = list.map((card) => card.getAttribute('href') || '');
-    const cacheFresh = Date.now() - nativeDownloadedCacheAt < 5 * 60 * 1000;
-    const allCached = keys.every((key) => key && nativeDownloadedCache.has(key));
+    const cacheFresh = Date.now() - nativeTrafficCacheAt < 5 * 60 * 1000;
+    const allCached = keys.every((key) => key && nativeTrafficCache.has(key));
 
     if (!cacheFresh || !allCached) {
-      if (!nativeDownloadedFetchPromise) {
-        nativeDownloadedFetchPromise = (async () => {
-          const values = await Promise.all(list.map((card) => fetchNativeTrackerDownloaded(card)));
+      if (!nativeTrafficFetchPromise) {
+        nativeTrafficFetchPromise = (async () => {
+          const values = await Promise.all(list.map((card) => fetchNativeTrackerTraffic(card)));
+          const sampledAt = Date.now();
           keys.forEach((key, index) => {
-            if (key) nativeDownloadedCache.set(key, values[index]);
+            if (key) {
+              const value = values[index];
+              nativeTrafficCache.set(key, value
+                ? { uploaded: value.uploaded, downloaded: value.downloaded, at: sampledAt }
+                : null);
+            }
           });
-          nativeDownloadedCacheAt = Date.now();
+          nativeTrafficCacheAt = sampledAt;
         })().finally(() => {
-          nativeDownloadedFetchPromise = null;
+          nativeTrafficFetchPromise = null;
         });
       }
-      await nativeDownloadedFetchPromise;
+      await nativeTrafficFetchPromise;
     }
 
-    return list.map((card) => ({
-      card,
-      downloaded: nativeDownloadedCache.get(card.getAttribute('href') || '') ?? null,
-    }));
+    return list.map((card) => {
+      const key = card.getAttribute('href') || '';
+      const value = nativeTrafficCache.get(key);
+      return {
+        card,
+        key,
+        uploaded: value ? value.uploaded : null,
+        downloaded: value ? value.downloaded : null,
+        at: value ? value.at : null,
+      };
+    });
   }
 
   async function refreshDownloadedMetrics(customTrackers) {
@@ -4697,10 +4822,13 @@
       ensureNativeDownloadedField(card);
     });
 
-    const rows = await readNativeTrackerDownloads(nativeCards);
+    const rows = await readNativeTrackerTraffic(nativeCards);
     if (!document.body.contains(dashboardMain) ||
         (location.pathname !== '/dashboard' && location.pathname !== '/dashboard/')) return;
 
+    // Persist independent cumulative Upload/Download observations for native
+    // Sherlock trackers, just as we already do for browser-local custom trackers.
+    recordNativeTrackerObservations(rows);
     rows.forEach(({ card, downloaded }) => {
       const value = ensureNativeDownloadedField(card);
       setMetricNodeBytes(value, downloaded);
@@ -4710,6 +4838,9 @@
     const totalValue = totalCard && totalCard.querySelector('.num');
     const total = sumVerifiedDownloads(rows, customTrackers);
     setMetricNodeBytes(totalValue, total);
+
+    const nativeTrackers = nativeTrackerHistoryRecords(rows);
+    updateDashboard24hBuffer(customTrackers, nativeTrackers);
   }
 
 
@@ -4726,8 +4857,6 @@
 
     // Expand the summary and native tracker cards to four metrics.
     const bufferBasis = updateDashboardTotals(trackers) || 'one_to_one';
-    // Update only the dedicated 24-hour Buffer card; preserve lifetime Total Buffer.
-    updateDashboard24hBuffer(trackers);
     const dashboardMain = document.querySelector('main') || document.querySelector('#main') || document.body;
     // Keep Sherlock's original centered max-width dashboard area.
     // The summary row and tracker grid share this same centered width.
