@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
-// @namespace    __SHERLOCK_URL__
-// @version      1.7.7
-// @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
+// @namespace    https://github.com/race-in/PT
+// @version      1.7.8
+// @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
+// @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
+// @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
 // @author       Sherlock
 // @match        http://*/*
 // @match        https://*/*
@@ -2037,7 +2039,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.7';
+  const VERSION = '1.7.8';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2100,7 +2102,7 @@
     get url() { return DEFAULT_URL; },
     // Migrate any previously saved mimas/alias URL to the canonical public dashboard.
     set url(v) { GM_setValue('sherlock.url', DEFAULT_URL); },
-    get interval() { return Math.max(15, Number(GM_getValue('sherlock.interval', 60)) || 60); },
+    get interval() { return Math.max(15, Number(GM_getValue('sherlock.interval', 15)) || 15); },
     set interval(v) { GM_setValue('sherlock.interval', Math.max(15, Number(v) || 60)); },
     get trackers() {
       let all;
@@ -3851,7 +3853,7 @@
         h('header', {}, h('h2', {}, 'Sherlock settings'), h('button', { class: 'btn', style: 'margin-left:auto', onclick: close }, '×')),
         h('div', { class: 'body' }, status,
           h('label', {}, 'Sherlock dashboard address', url),
-          h('label', {}, 'Try automatic updates at most every … minutes (15 or more)', interval),
+          h('label', {}, 'Refresh tracker statistics automatically every … minutes (15 minimum)', interval),
           h('div', { class: 'muted' }, 'Custom tracker data is saved by Tampermonkey/Greasemonkey in this browser only. It will not sync to another device or appear to other Sherlock users.'),
           h('div', { class: 'muted' }, 'Trackers on this browser: ' + Object.keys(store.trackers).length)),
         h('footer', {},
@@ -4276,9 +4278,12 @@
             class: 'size-6 shrink-0 rounded-md bg-sunken flex items-center justify-center text-[9px] font-semibold text-muted',
           }, (tracker.shortName || 'TRK').slice(0, 4));
 
+      const updatedLabel = tracker.lastSync
+        ? 'Last successful update: ' + new Date(Number(tracker.lastSync)).toLocaleString()
+        : 'No successful update yet';
       const status = tracker.lastError
-        ? h('span', { class: 'tag-down' }, 'Error')
-        : h('span', { class: 'tag-up' }, 'OK');
+        ? h('span', { class: 'tag-down', title: String(tracker.lastError) }, 'Error')
+        : h('span', { class: 'tag-up', title: updatedLabel }, 'OK');
 
       const card = h('a', {
         class: 'card flex h-full min-w-0 flex-col p-4 hover:border-line-strong',
@@ -4563,14 +4568,15 @@
   let dashboardSyncTimer = null;
   let dashboardSyncRunning = false;
 
-  async function dashboardAutoSync() {
+  async function dashboardAutoSync(force = false) {
     if (dashboardSyncRunning || !/\/dashboard\/?$/.test(location.pathname)) return;
     dashboardSyncRunning = true;
     try {
+      const now = Date.now();
       const due = Object.values(store.trackers)
         .filter((tracker) => tracker && tracker.host && tracker.enabled !== false)
-        .filter((tracker) => Date.now() - Number(tracker.lastSync || 0) >= store.interval * 60000 &&
-          Date.now() - Number(tracker.lastAttempt || 0) >= 10 * 60000)
+        .filter((tracker) => now - Number(tracker.lastAttempt || 0) >= 10 * 60000)
+        .filter((tracker) => force || now - Number(tracker.lastSync || 0) >= store.interval * 60000)
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
       for (const tracker of due) {
@@ -4588,7 +4594,8 @@
 
   function startDashboardAutoSync() {
     if (dashboardSyncTimer) return;
-    dashboardAutoSync();
+    // Refresh immediately on dashboard entry, unless the tracker was attempted in the last 10 minutes.
+    dashboardAutoSync(true);
     dashboardSyncTimer = window.setInterval(() => {
       if (!/\/dashboard\/?$/.test(location.pathname)) {
         window.clearInterval(dashboardSyncTimer);
@@ -4629,9 +4636,15 @@
   }
 
   main();
-  // Sherlock uses Turbo navigation; redraw the local section when navigating without a full reload.
+  // Sherlock uses Turbo navigation; refresh automatically when the dashboard tab becomes active again.
   document.addEventListener('turbo:load', main);
   document.addEventListener('turbo:render', main);
   window.addEventListener('pageshow', main);
+  window.addEventListener('focus', () => {
+    if (/\/dashboard\/?$/.test(location.pathname)) dashboardAutoSync(true);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && /\/dashboard\/?$/.test(location.pathname)) dashboardAutoSync(true);
+  });
 
 })();
