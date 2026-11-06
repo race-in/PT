@@ -802,13 +802,13 @@
   },
   {
     "name": "LzTr",
-    "short": "LT2",
+    "short": "LZTR",
     "source": "generated",
     "software": "Gazelle"
   },
   {
     "name": "M-Team",
-    "short": "MTTP",
+    "short": "M-Team",
     "source": "official",
     "software": "NexusPHP"
   },
