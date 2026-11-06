@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.7
+// @version      1.10.8
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/5.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.7';
+  const VERSION = '1.10.8';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5405,14 +5405,12 @@
       const text = (candidate.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
       return /\bbuffer\b/.test(text) && /(?:last\s*)?24\s*(?:h\b|hours?\b)/.test(text);
     });
-    if (!card) return null;
-
     // Keep five equal, aligned summary boxes:
     // Total Buffer | Total Uploaded | Total Downloaded |
     // Uploaded, last 24 hours | Buffer, last 24 hours.
     let uploaded24Card = null;
     if (summarySection) {
-      if (card.parentNode !== summarySection) summarySection.appendChild(card);
+      if (card && card.parentNode !== summarySection) summarySection.appendChild(card);
 
       const summaryLabel = (candidate) => {
         const label = candidate && candidate.querySelector('.eyebrow');
@@ -5457,7 +5455,7 @@
       }
       delete uploaded24Card.dataset.sherlockTotalDownloaded;
 
-      const bufferLabel = card.querySelector('.eyebrow');
+      const bufferLabel = card && card.querySelector('.eyebrow');
       if (bufferLabel) bufferLabel.textContent = 'Buffer, last 24 hours';
 
       // Deterministic order: five equal cards, side by side on desktop.
@@ -5499,7 +5497,7 @@
       const coverage = readyTrackers + '/' + totalTrackers;
       const message = 'Collecting 24-hour upload/download history: ' +
         readyTrackers + '/' + totalTrackers + ' trackers have a complete window.';
-      const valueNode = card.querySelector('.num');
+      const valueNode = card && card.querySelector('.num');
       if (valueNode) {
         // Never leave an old/stale zero visible while the local 24-hour window is incomplete.
         valueNode.textContent = 'Collecting';
@@ -5517,7 +5515,7 @@
     const uploaded = customTraffic.uploaded + nativeTraffic.uploaded;
     const downloaded = customTraffic.downloaded + nativeTraffic.downloaded;
     const buffer = uploaded - downloaded;
-    writeDashboardMetric(card, buffer);
+    if (card) writeDashboardMetric(card, buffer);
     if (uploaded24Card) writeDashboardMetric(uploaded24Card, uploaded);
 
     const uploaded24Node = uploaded24Card && uploaded24Card.querySelector('.num');
@@ -5531,7 +5529,7 @@
         ' · Coverage: ' + readyTrackers + '/' + totalTrackers + ' trackers';
     }
 
-    const valueNode = card.querySelector('.num');
+    const valueNode = card && card.querySelector('.num');
     if (valueNode) {
       valueNode.dataset.sherlock24hUploaded = String(Math.round(uploaded));
       valueNode.dataset.sherlock24hDownloaded = String(Math.round(downloaded));
