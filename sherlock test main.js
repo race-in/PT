@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.0
+// @version      1.6.1
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -714,7 +714,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.0';
+  const VERSION = '1.6.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2499,8 +2499,11 @@
     const uploadedCard = cards.find((card) => labelOf(card) === 'total uploaded');
     if (!bufferCard || !uploadedCard) return null;
 
-    summarySection.classList.remove('lg:grid-cols-3');
-    summarySection.classList.add('lg:grid-cols-4');
+    summarySection.classList.remove('sm:grid-cols-3', 'lg:grid-cols-3');
+    summarySection.classList.add('sm:grid-cols-2', 'lg:grid-cols-4', 'w-full');
+    cards.forEach((card) => {
+      card.classList.add('h-full', 'min-w-0');
+    });
 
     let downloadedCard = cards.find((card) => labelOf(card) === 'total downloaded') ||
       summarySection.querySelector('[data-sherlock-total-downloaded]');
@@ -2694,7 +2697,10 @@
     const dashboardMain = document.querySelector('main') || document.querySelector('#main') || document.body;
     const nativeCards = Array.from(dashboardMain.querySelectorAll('a.card[href^="/trackers/"]'))
       .filter((card) => !card.hasAttribute('data-sherlock-custom-host'));
-    nativeCards.forEach(ensureNativeDownloadedField);
+    nativeCards.forEach((card) => {
+      card.classList.add('h-full', 'min-w-0');
+      ensureNativeDownloadedField(card);
+    });
 
     const rows = await readNativeTrackerDownloads(nativeCards);
     if (!document.body.contains(dashboardMain) ||
@@ -2726,6 +2732,10 @@
     // Expand the summary and native tracker cards to four metrics.
     const bufferBasis = updateDashboardTotals(trackers) || 'one_to_one';
     const dashboardMain = document.querySelector('main') || document.querySelector('#main') || document.body;
+    // Sherlock's centered max-width container left unused space on wide monitors.
+    // Keep native padding but let the dashboard use the full content area beside the sidebar.
+    dashboardMain.classList.remove('mx-auto', 'max-w-6xl');
+    dashboardMain.classList.add('w-full', 'max-w-none');
     Array.from(dashboardMain.querySelectorAll('a.card[href^="/trackers/"]'))
       .filter((card) => !card.hasAttribute('data-sherlock-custom-host'))
       .forEach(ensureNativeDownloadedField);
@@ -2786,7 +2796,7 @@
     // Four metrics: Buffer, Ratio, Downloaded and 24h; Uploaded remains in the sidebar above.
     const section = h('section', {
       id: 'sherlock-local-trackers',
-      class: 'mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3',
+      class: 'mt-6 grid w-full items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3',
       'aria-label': 'Custom trackers',
     });
 
@@ -2817,7 +2827,7 @@
         : h('span', { class: 'tag-up' }, 'OK');
 
       const card = h('a', {
-        class: 'card flex flex-col p-4 hover:border-line-strong',
+        class: 'card flex h-full min-w-0 flex-col p-4 hover:border-line-strong',
         href: tracker.origin || '#',
         target: '_blank',
         rel: 'noopener noreferrer',
