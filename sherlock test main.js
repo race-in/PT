@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.4
+// @version      1.9.5
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.4';
+  const VERSION = '1.9.5';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4216,7 +4216,17 @@
       if (Number(point.at) <= cutoff) before = point;
       else { after = point; break; }
     }
-    if (!before) return null;
+    // If this tracker was first added less than 24 hours ago, there cannot be
+    // a snapshot at the 24-hour cutoff yet. Use the first successful observation
+    // as its baseline and count every verified increase since then immediately.
+    // This reports the observed part of the rolling window instead of waiting a
+    // full day and silently dropping the tracker's first hours of traffic.
+    if (!before) {
+      const firstObserved = points[0];
+      if (!firstObserved || Number(firstObserved.at) <= cutoff) return null;
+      before = firstObserved;
+      after = null;
+    }
 
     const beforeAt = Number(before.at);
     const beforeUploaded = Number(before.uploaded);
