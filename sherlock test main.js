@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.5
+// @version      1.9.6
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1481,6 +1481,7 @@
     const hosts = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
     const matches = (fn) => hosts.some((value) => fn(value));
     if (matches(isCinematikHost)) return 'Cinematik';
+    if (matches(isKaragargaHost)) return 'Karagarga';
     if (matches(isBlutopiaHost)) return 'Blutopia';
     if (matches(isDesiGaaneHost)) return 'DesiGaane';
     if (matches(isPolishTrackerHost) || isPolishTrackerDocument(doc)) return 'PolishTracker';
@@ -2015,6 +2016,11 @@
     return host === 'cinematik.net' || host.endsWith('.cinematik.net');
   }
 
+  function isKaragargaHost(value) {
+    const host = trackerHostname(value);
+    return host === 'karagarga.in' || host.endsWith('.karagarga.in');
+  }
+
   function isBlutopiaHost(value) {
     const host = trackerHostname(value);
     return host === 'blutopia.cc' || host.endsWith('.blutopia.cc') ||
@@ -2039,6 +2045,147 @@
       !!doc.querySelector('script[src*="/preview/assets/"]');
   }
 
+  function isKaragargaProfileDocument(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return false;
+    if (!/^KG\s*[-–—:]\s*Details for\b/i.test(String(doc.title || ''))) return false;
+    let uploaded = false;
+    let downloaded = false;
+    doc.querySelectorAll('tr').forEach((row) => {
+      const cells = Array.from(row.children || []).filter((cell) =>
+        String(cell.tagName || '').toLowerCase() === 'td'
+      );
+      if (cells.length < 2) return;
+      const label = normLabel(cells[0].textContent || '');
+      if (LABELS.uploaded.some((regex) => regex.test(label)) &&
+          parseBytes(cells[1].textContent || '', false) !== null) uploaded = true;
+      if (LABELS.downloaded.some((regex) => regex.test(label)) &&
+          parseBytes(cells[1].textContent || '', false) !== null) downloaded = true;
+    });
+    return uploaded && downloaded;
+  }
+
+  function mapKaragargaProfileRows(rows, statusText) {
+    const stats = resolveStats(rows || [], false);
+    const header = String(statusText || '').replace(/[\s\u00a0]+/g, ' ').trim();
+    if (stats.ratio === undefined) {
+      const ratio = header.match(/\bRatio\s*:\s*(∞|inf(?:inity)?|[-–—]|[\d.,]+)/i);
+      if (ratio) {
+        const parsed = parseRatio(ratio[1]);
+        if (parsed) stats.ratio = parsed.infinite ? Infinity : parsed.value;
+      }
+    }
+    if (stats.ratio === undefined &&
+        Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded)) {
+      stats.ratio = stats.downloaded > 0
+        ? stats.uploaded / stats.downloaded
+        : (stats.uploaded > 0 ? Infinity : null);
+    }
+    return stats;
+  }
+
+  function findKaragargaProfileLink(doc, base, expectedOrigin) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return null;
+    let baseUrl;
+    try { baseUrl = new URL(base); } catch (e) { return null; }
+    const origin = expectedOrigin || baseUrl.origin;
+    const candidates = [];
+    for (const anchor of doc.querySelectorAll('a[href*="userdetails.php?id="]')) {
+      const href = anchor.getAttribute('href') || '';
+      let url;
+      try { url = new URL(href, baseUrl.href); } catch (e) { continue; }
+      if (url.origin !== origin || !/^\/userdetails\.php$/i.test(url.pathname) ||
+          !/^\d+$/.test(url.searchParams.get('id') || '')) continue;
+      const title = String(anchor.getAttribute('title') || '');
+      const greeting = anchor.closest && anchor.closest('nobr');
+      const greetingText = String(greeting && greeting.textContent || '').replace(/\s+/g, ' ').trim();
+      let score = 0;
+      if (/details page/i.test(title)) score += 100;
+      if (/^Hi\b/i.test(greetingText)) score += 80;
+      if (score) candidates.push({
+        url: url.href,
+        text: String(anchor.textContent || '').replace(/\s+/g, ' ').trim(),
+        score,
+      });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.length ? { url: candidates[0].url, text: candidates[0].text } : null;
+  }
+
+  async function readKaragarga(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document')
+      ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    let profileUrl = tracker.profileUrl || null;
+    let linkText = tracker.username || '';
+
+    if (!profileUrl && isKaragargaProfileDocument(sourceDocument)) profileUrl = pageUrl;
+
+    if (!profileUrl) {
+      let link = findKaragargaProfileLink(sourceDocument, pageUrl, origin);
+      if (!link) {
+        try {
+          const home = await request(new URL('/', origin).href, 'text/html');
+          const homeDocument = new DOMParser().parseFromString(home.text, 'text/html');
+          link = findKaragargaProfileLink(homeDocument, home.url || new URL('/', origin).href, origin);
+        } catch (e) {
+          if (e instanceof ReadError) throw e;
+          throw new ReadError('Could not read the Karagarga home page to find your profile link.');
+        }
+      }
+      if (!link) throw new ReadError('Could not find the Karagarga "click to see your details page" link.');
+      profileUrl = link.url;
+      linkText = link.text || linkText;
+    }
+
+    let profileDocument = sourceDocument;
+    let finalUrl = pageUrl;
+    if (!isKaragargaProfileDocument(profileDocument) ||
+        new URL(pageUrl, origin).href !== new URL(profileUrl, origin).href) {
+      const response = await request(profileUrl, 'text/html');
+      if (response.redirected && /login|signin/i.test(response.url)) {
+        throw new ReadError('You are signed out of Karagarga. Sign in and try again.');
+      }
+      profileDocument = new DOMParser().parseFromString(response.text, 'text/html');
+      finalUrl = response.url || profileUrl;
+    }
+    if (profileDocument.querySelector('input[type="password"]')) {
+      throw new ReadError('You are signed out of Karagarga. Sign in and try again.');
+    }
+
+    const pairs = [];
+    profileDocument.querySelectorAll('tr').forEach((row) => {
+      const cells = Array.from(row.children || []).filter((cell) =>
+        String(cell.tagName || '').toLowerCase() === 'td'
+      );
+      if (cells.length < 2) return;
+      pairs.push({
+        label: String(cells[0].textContent || '').replace(/\s+/g, ' ').trim(),
+        value: String(cells[1].textContent || '').replace(/\s+/g, ' ').trim(),
+      });
+    });
+
+    let stats = mapKaragargaProfileRows(pairs, profileDocument.body && profileDocument.body.textContent || '');
+    if (!Number.isFinite(stats.uploaded) || !Number.isFinite(stats.downloaded)) {
+      stats = Object.assign(stats, mapKaragargaProfileRows(
+        pairsFromText(plainText(profileDocument)),
+        profileDocument.body && profileDocument.body.textContent || ''
+      ));
+    }
+    if (!Number.isFinite(stats.uploaded) || stats.uploaded < 0 ||
+        !Number.isFinite(stats.downloaded) || stats.downloaded < 0) {
+      throw new ReadError('Karagarga profile did not contain valid Uploaded and Downloaded totals.');
+    }
+
+    const parsedUrl = new URL(finalUrl || profileUrl, origin);
+    const userId = parsedUrl.searchParams.get('id') || '';
+    const titleName = String(profileDocument.title || '').match(/^KG\s*[-–—:]\s*Details for\s+(.+)$/i);
+    const username = linkText || (titleName ? titleName[1].trim() : '');
+    return { kind: 'profile', userId, username, profileUrl, stats };
+  }
+
   function trackerNameForNewTracker(title, host, origin, doc) {
     const known = knownTrackerDisplayName(host, origin, '', doc);
     if (known) return (trackerDirectoryEntry(known) || {}).name || known;
@@ -2053,7 +2200,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2062,7 +2209,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.5';
+  const VERSION = '1.9.6';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3679,6 +3826,10 @@
       !!(trackerIdentity && trackerIdentity.name === 'PolishTracker') ||
       trackerNameKey === 'polishtracker' || trackerShortKey === 'PT' ||
       isPolishTrackerDocument(sourceDocument);
+    const isKaragarga = isKaragargaHost(trackerHost) ||
+      !!(trackerIdentity && trackerIdentity.name === 'Karagarga') ||
+      trackerNameKey === 'karagarga' || trackerShortKey === 'KG' ||
+      isKaragargaProfileDocument(sourceDocument);
     const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
       !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
     const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
@@ -3687,6 +3838,9 @@
 
     // PTP uses the authenticated profile/header reader, not the generic Gazelle index adapter.
     if (isPassThePopcorn) return complete(readPassThePopcorn(tracker, { origin, request, document: sourceDocument, pageUrl }));
+
+    // Karagarga uses its authenticated legacy userdetails.php profile.
+    if (isKaragarga) return complete(readKaragarga(tracker, { origin, request, document: sourceDocument, pageUrl }));
 
     // PolishTracker uses ReaperEngine, not Gazelle or UNIT3D.
     if (isPolishTracker) return complete(readPolishTracker(tracker, { origin, request, document: sourceDocument, pageUrl }));
@@ -5057,6 +5211,21 @@
   }
 
   function looksLikeTracker() {
+    if (isKaragargaHost(PAGE_HOST) || isKaragargaProfileDocument(document)) {
+      if (document.querySelector('input[type="password"]')) return false;
+      const authenticatedProfile = isKaragargaProfileDocument(document);
+      const ownProfileLink = !!findKaragargaProfileLink(document, location.href, location.origin);
+      if (!authenticatedProfile && !ownProfileLink) return false;
+      const versionKey = 'sherlock.karagarga.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
+      }
+      return true;
+    }
+
     if (isTorrentLeechDocument(document)) {
       if (document.querySelector('input[type="password"]')) return false;
       const versionKey = 'sherlock.torrentleech.autodetect.version.' + PAGE_HOST;
