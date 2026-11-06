@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.1
+// @version      1.7.2
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2028,7 +2028,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.1';
+  const VERSION = '1.7.2';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2309,8 +2309,10 @@
   // UNIT3D shows upload, download, ratio, bonus and seeding in a bar on every page: class names say which.
   function hasUnit3DStatsBar(doc) {
     if (!doc || typeof doc.querySelector !== 'function') return false;
+    // #userinfo_stats is also used by non-UNIT3D themes, including Gazelle layouts.
+    // Only UNIT3D-specific ratio-bar markup is a safe generic fallback.
     return !!doc.querySelector(
-      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"], #userinfo_stats'
+      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"]'
     );
   }
 
@@ -3248,6 +3250,8 @@
       if (tracker && tracker.origin) hostname = new URL(tracker.origin).hostname;
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
+
+    // Keep dedicated adapters ahead of generic engine detection.
     if (isCinematikHost(hostname)) return 'unit3d';
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
@@ -3257,6 +3261,14 @@
     if (isMyAnonamouseTracker(tracker)) return 'myanonamouse';
     if (isFileListTracker(tracker)) return 'filelist';
     if (isCinemageddonTracker(tracker)) return 'cinemageddon';
+
+    // The tracker identity list includes its software family. Use it to select the
+    // correct reader instead of guessing from generic DOM IDs shared by themes.
+    const identity = trackerDirectoryHostEntry(hostname) ||
+      trackerDirectoryEntry(tracker && (tracker.name || tracker.fullName));
+    const software = String(identity && identity.software || '').toLowerCase();
+    if (software.includes('gazelle')) return 'gazelle';
+    if (software.includes('unit3d')) return 'unit3d';
     return null;
   }
 
@@ -3323,7 +3335,8 @@
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
 
-    if (apiType === 'unit3d' || hasUnit3DStatsBar(sourceDocument)) return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'unit3d' || (!apiType && hasUnit3DStatsBar(sourceDocument))) return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    if (apiType === 'gazelle') return complete(readGazelle(request));
     if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
     if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
     if (apiType === 'iptorrents') return complete(readIptorrents(tracker, { origin, request, document: sourceDocument, pageUrl }));
