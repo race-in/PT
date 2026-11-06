@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.0
+// @version      1.10.1
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1551,7 +1551,17 @@
   // Sum native tracker buffer/ratio rows when the dashboard summary is internally inconsistent.
   // Buffer = uploaded - downloaded; ratio = uploaded / downloaded.
   function customTrackerBuffer(stats, bufferBasis) {
-    // An explicit tracker Buffer is authoritative; only infer when the tracker does not supply one.
+    // Some trackers expose separate one-to-one and required-ratio buffers.
+    // Prefer the matching explicit value before the generic tracker Buffer.
+    if (bufferBasis === 'required_ratio') {
+      const requiredRatioBuffer = stats && stats.required_ratio_buffer;
+      if (requiredRatioBuffer !== null && requiredRatioBuffer !== undefined &&
+          requiredRatioBuffer !== '' && Number.isFinite(Number(requiredRatioBuffer))) {
+        return Number(requiredRatioBuffer);
+      }
+    }
+
+    // An explicit generic tracker Buffer is authoritative; only infer when absent.
     const suppliedBuffer = stats && stats.buffer;
     if (suppliedBuffer !== null && suppliedBuffer !== undefined && suppliedBuffer !== '' &&
         Number.isFinite(Number(suppliedBuffer))) {
@@ -2284,7 +2294,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.0';
+  const VERSION = '1.10.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3941,7 +3951,7 @@
         if (buffer !== null) stats.buffer = buffer;
         if (badges.length > 1) {
           const classBuffer = parseBytes(badges[1].textContent || '', false);
-          if (classBuffer !== null) stats.required_class_buffer = classBuffer;
+          if (classBuffer !== null) stats.required_ratio_buffer = classBuffer;
         }
       }
     }
