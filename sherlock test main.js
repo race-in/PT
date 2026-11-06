@@ -4790,7 +4790,7 @@
     });
 
     // 2) Render dashboard cards with the SAME layout as Sherlock's native tracker cards.
-    // Four metrics: Buffer, Ratio, Downloaded and 24h Downloaded; Uploaded remains in the sidebar above.
+    // Three metrics only: Buffer, Ratio and Downloaded; Uploaded remains in the sidebar above.
     const section = h('section', {
       id: 'sherlock-local-trackers',
       class: 'mt-6 grid w-full items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4',
