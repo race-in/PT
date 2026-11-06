@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.3
+// @version      1.10.4
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -1482,6 +1482,7 @@
     const matches = (fn) => hosts.some((value) => fn(value));
     if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isKaragargaHost)) return 'Karagarga';
+    if (matches(isMTeamHost) || isMTeamDocument(doc)) return 'M-Team';
     if (matches(isBakaBTHost) || isBakaBTDocument(doc)) return 'BakaBT';
     if (matches(isSceneHDHost) || isSceneHDDocument(doc)) return 'SceneHD';
     if (matches(isBeyondHDHost) || isBeyondHDDocument(doc)) return 'BeyondHD';
@@ -2377,6 +2378,19 @@
       host === 'm-team.io' || host.endsWith('.m-team.io');
   }
 
+  // M-Team is a React SPA: its server HTML is a shell, not a stats-bearing profile.
+  // Identify it from the document signature and first-party resources in _APIHOSTS.
+  function isMTeamDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function' ||
+        !/^M-Team$/i.test(String(doc.title || '')) ||
+        !doc.querySelector('#root')) return false;
+    let source = String(doc.documentElement && doc.documentElement.innerHTML || '');
+    if (!source && typeof doc.querySelectorAll === 'function') {
+      source = Array.from(doc.querySelectorAll('script')).map((node) => node.textContent || '').join(' ');
+    }
+    return /static\.m-team\.cc\/static\/js|api(?:2)?\.m-team\.(?:cc|io)\/api|_APIHOSTS/i.test(source);
+  }
+
   // BeyondHD is a Laravel/F3NIX tracker, not UNIT3D or Gazelle.
   function isBeyondHDHost(value) {
     const host = trackerHostname(value);
@@ -2583,7 +2597,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isBakaBTHost, isBakaBTProfileDocument, isBakaBTDocument, bakaBTOwnProfileLink, bakaBTProfileIdFromUrl, parseBakaBTProfileStats, isSceneHDHost, isSceneHDProfileDocument, isSceneHDDocument, sceneHDOwnProfileLink, parseSceneHDProfileStats, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, isMTeamDocument, isBakaBTHost, isBakaBTProfileDocument, isBakaBTDocument, bakaBTOwnProfileLink, bakaBTProfileIdFromUrl, parseBakaBTProfileStats, isSceneHDHost, isSceneHDProfileDocument, isSceneHDDocument, sceneHDOwnProfileLink, parseSceneHDProfileStats, isBeyondHDHost, isBeyondHDDocument, parseBeyondHDStats, beyondHDIdentity, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapMTeamProfilePayload, mTeamApiBases, isMTeamHost, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isKaragargaHost, isKaragargaProfileDocument, mapKaragargaProfileRows, findKaragargaProfileLink, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2592,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.3';
+  const VERSION = '1.10.4';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3799,7 +3813,7 @@
     return chosen;
   }
 
-  function trackerApiType(tracker) {
+  function trackerApiType(tracker, sourceDocument) {
     let hostname = String(tracker && tracker.host || '');
     try {
       if (tracker && tracker.origin) hostname = new URL(tracker.origin).hostname;
@@ -3813,8 +3827,14 @@
     if (isSceneHDHost(hostname) || (savedIdentity && savedIdentity.name === 'SceneHD')) return 'scenehd';
     // BeyondHD exposes account totals in its Laravel/F3NIX navbar and member profile.
     if (isBeyondHDHost(hostname) || (savedIdentity && savedIdentity.name === 'BeyondHD')) return 'beyondhd';
-    // M-Team uses its custom mTorrent API and requires a token from Control Panel → Lab.
-    if (isMTeamHost(hostname) || (savedIdentity && savedIdentity.name === 'M-Team')) return 'mteam';
+    // M-Team uses its custom mTorrent API; accept all stable identity signals.
+    if (isMTeamHost(hostname) || isMTeamHost(tracker && tracker.host) ||
+        isMTeamHost(tracker && tracker.origin) ||
+        (savedIdentity && savedIdentity.name === 'M-Team') ||
+        normalizeTrackerDirectoryName(tracker && (tracker.name || tracker.fullName)) === 'mteam' ||
+        String(tracker && tracker.shortName || '').trim().toUpperCase() === 'M-TEAM' ||
+        String(tracker && tracker.kind || '').toLowerCase() === 'mteam' ||
+        isMTeamDocument(sourceDocument)) return 'mteam';
     // AnimeBytes is NOT a stock Gazelle JSON tracker. Its /ajax.php endpoint
     // returns HTML; use the same signed-in profile-page fallback as the older
     // working Sherlock reader instead of locking it to the Gazelle adapter.
@@ -4482,7 +4502,7 @@
     const request = context.request || fetchText;
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
     const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
-    const apiType = trackerApiType(tracker);
+    const apiType = trackerApiType(tracker, sourceDocument);
     const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
     const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
     const trackerNameKey = normalizeTrackerDirectoryName(tracker.name || tracker.fullName || '');
@@ -4503,9 +4523,12 @@
       !!(trackerIdentity && trackerIdentity.name === 'BeyondHD') ||
       trackerNameKey === 'beyondhd' || trackerShortKey === 'BHD' ||
       isBeyondHDDocument(sourceDocument);
-    const isMTeam = isMTeamHost(trackerHost) ||
+    const isMTeam = apiType === 'mteam' ||
+      String(tracker.kind || '').toLowerCase() === 'mteam' ||
+      isMTeamHost(trackerHost) || isMTeamHost(tracker.origin) ||
       !!(trackerIdentity && trackerIdentity.name === 'M-Team') ||
-      trackerNameKey === 'mteam' || trackerShortKey === 'M-TEAM';
+      trackerNameKey === 'mteam' || trackerShortKey === 'M-TEAM' ||
+      isMTeamDocument(sourceDocument);
     const isKaragarga = isKaragargaHost(trackerHost) ||
       !!(trackerIdentity && trackerIdentity.name === 'Karagarga') ||
       trackerNameKey === 'karagarga' || trackerShortKey === 'KG' ||
@@ -4525,8 +4548,8 @@
     // BeyondHD account totals come from its authenticated Laravel/F3NIX HTML.
     if (isBeyondHD) return readBeyondHD(tracker, { origin, request, document: sourceDocument, pageUrl });
 
-    // M-Team mTorrent statistics come from its token-authenticated member API.
-    if (isMTeam) return readMTeam(tracker, { origin });
+    // Hard-route M-Team records before any generic profile or UNIT3D reader.
+    if (apiType === 'mteam' || isMTeam) return readMTeam(tracker, { origin });
 
     // PTP uses the authenticated profile/header reader, not the generic Gazelle index adapter.
     if (isPassThePopcorn) return complete(readPassThePopcorn(tracker, { origin, request, document: sourceDocument, pageUrl }));
@@ -5961,7 +5984,7 @@
       return true;
     }
 
-    if (isMTeamHost(PAGE_HOST)) {
+    if (isMTeamHost(PAGE_HOST) || isMTeamDocument(document)) {
       if (document.querySelector('input[type="password"]') ||
           /\/(?:login|signin|auth)(?:\/|$)/i.test(location.pathname)) return false;
       // The mTorrent frontend is a SPA; it does not expose classic NexusPHP
@@ -6147,7 +6170,8 @@
 
   async function autoAddTracker() {
     const attemptHost = PAGE_HOST;
-    if (isMTeamHost(attemptHost) && !String(GM_getValue('sherlock.mteam.apiKey', '') || '').trim()) {
+    if ((isMTeamHost(attemptHost) || isMTeamDocument(document)) &&
+        !String(GM_getValue('sherlock.mteam.apiKey', '') || '').trim()) {
       const promptKey = 'sherlock.mteam.token-prompt.' + attemptHost;
       const lastPrompt = Number(GM_getValue(promptKey, 0)) || 0;
       if (Date.now() - lastPrompt > 6 * 60 * 60 * 1000) {
