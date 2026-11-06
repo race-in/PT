@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.4
+// @version      1.8.5
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2048,7 +2048,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.4';
+  const VERSION = '1.8.5';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3398,6 +3398,15 @@
     );
   }
 
+  function isPassThePopcornDocument(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    const title = String(doc.title || '');
+    if (!/PassThePopcorn/i.test(title)) return false;
+    // Require the PTP member header and its classic stats list as well as the title.
+    return !!doc.querySelector('#userinfo_stats') &&
+      !!doc.querySelector('#userinfo_username a[href*="user.php?id="]');
+  }
+
   async function readTracker(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -3407,11 +3416,15 @@
     const apiType = trackerApiType(tracker);
     const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
     const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
+    const trackerNameKey = normalizeTrackerDirectoryName(tracker.name || tracker.fullName || '');
+    const trackerShortKey = String(tracker.shortName || '').trim().toUpperCase();
     const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
       !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
     const isPassThePopcorn = trackerHost === 'passthepopcorn.me' ||
       trackerHost.endsWith('.passthepopcorn.me') ||
-      !!(trackerIdentity && trackerIdentity.name === 'PassThePopcorn');
+      !!(trackerIdentity && trackerIdentity.name === 'PassThePopcorn') ||
+      trackerNameKey === 'ptp' || trackerNameKey === 'passthepopcorn' ||
+      trackerShortKey === 'PTP' || isPassThePopcornDocument(sourceDocument);
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
 
