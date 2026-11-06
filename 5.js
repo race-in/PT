@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.11.0
+// @version      1.11.1
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/5.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.11.0';
+  const VERSION = '1.11.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5105,11 +5105,13 @@
     // as its baseline and count every verified increase since then immediately.
     // This reports the observed part of the rolling window instead of waiting a
     // full day and silently dropping the tracker's first hours of traffic.
+    let partialWindow = false;
     if (!before) {
       const firstObserved = points[0];
       if (!firstObserved || Number(firstObserved.at) <= cutoff) return null;
       before = firstObserved;
       after = null;
+      partialWindow = true;
     }
 
     const beforeAt = Number(before.at);
@@ -5130,8 +5132,6 @@
       baselineUploaded = beforeUploaded + (afterUploaded - beforeUploaded) * progress;
       baselineDownloaded = beforeDownloaded + (afterDownloaded - beforeDownloaded) * progress;
       baselineAt = cutoff;
-    } else if (cutoff - beforeAt > 60 * 60 * 1000) {
-      return null;
     }
 
     if (currentUploaded < baselineUploaded || currentDownloaded < baselineDownloaded) return null;
@@ -5148,6 +5148,8 @@
       baselineDownloaded: Math.round(baselineDownloaded),
       currentUploaded: Math.round(currentUploaded),
       currentDownloaded: Math.round(currentDownloaded),
+      partial: partialWindow || baselineAt > cutoff,
+      coverageMs: Math.max(0, currentAt - baselineAt),
     };
   }
 
@@ -5158,17 +5160,35 @@
     let downloaded = 0;
     let buffer = 0;
     let ready = 0;
+    let partialWindow = 0;
+    const missing = [];
+    const partialTrackers = [];
 
     trackers.forEach((tracker) => {
       const traffic = trackerTraffic24h(tracker);
-      if (!traffic) return;
+      const label = String(
+        tracker && (tracker.displayName || tracker.name || tracker.shortName || tracker.host || tracker.origin) ||
+        'Unknown tracker'
+      ).trim();
+      if (!traffic) {
+        missing.push(label);
+        return;
+      }
       uploaded += traffic.uploaded;
       downloaded += traffic.downloaded;
       buffer += traffic.buffer;
       ready++;
+      if (traffic.partial) {
+        partialWindow++;
+        partialTrackers.push({ name: label, coverageMs: traffic.coverageMs });
+      }
     });
 
-    return { uploaded, downloaded, buffer, ready, total: trackers.length, complete: ready === trackers.length };
+    return {
+      uploaded, downloaded, buffer, ready, total: trackers.length,
+      complete: ready === trackers.length && partialWindow === 0,
+      missing, partialWindow, partialTrackers,
+    };
   }
 
   async function push(t, opts) {
@@ -5544,17 +5564,35 @@
     const totalTrackers = customTraffic.total + nativeTraffic.total;
     const readyTrackers = customTraffic.ready + nativeTraffic.ready;
 
-    // The native Sherlock 24h card can be stale/zero. Recalculate it from the
-    // actual per-tracker cumulative Upload and Download snapshots in this browser.
-    if (!totalTrackers || !customTraffic.complete || !nativeTraffic.complete) {
-      const coverage = readyTrackers + '/' + totalTrackers;
-      const message = 'Collecting 24-hour upload/download history: ' +
-        readyTrackers + '/' + totalTrackers + ' trackers have a complete window.';
-      const valueNode = buffer24Value;
-      if (valueNode) {
-        valueNode.textContent = 'Collecting';
-        valueNode.dataset.sherlock24hCoverage = coverage;
-        valueNode.title = message;
+    // Recalculate from per-tracker cumulative Upload/Download snapshots.
+    // One tracker without a usable window must not freeze all others: display the
+    // verified portion with an explicit approximation marker and coverage details.
+    const missingTrackers = Array.from(new Set(
+      (customTraffic.missing || []).concat(nativeTraffic.missing || [])
+    ));
+    const partialWindowTrackers = (customTraffic.partialTrackers || [])
+      .concat(nativeTraffic.partialTrackers || []);
+    const partial = readyTrackers < totalTrackers || partialWindowTrackers.length > 0;
+    const coverage = readyTrackers + '/' + totalTrackers;
+    const coverageParts = [];
+    if (missingTrackers.length) coverageParts.push('No usable history: ' + missingTrackers.join(', '));
+    if (partialWindowTrackers.length) {
+      coverageParts.push('Short observation window: ' + partialWindowTrackers.map((item) => {
+        const hours = item.coverageMs / (60 * 60 * 1000);
+        return item.name + ' (' + hours.toFixed(1) + 'h observed)';
+      }).join(', '));
+    }
+    const coverageMessage = partial
+      ? 'PARTIAL 24-hour totals: ' + readyTrackers + '/' + totalTrackers +
+        ' trackers included. ' + coverageParts.join('. ')
+      : 'Complete 24-hour history: ' + totalTrackers + '/' + totalTrackers + ' trackers.';
+
+    if (!totalTrackers || !readyTrackers) {
+      const message = 'Collecting 24-hour upload/download history: no tracker has a usable observation window yet.';
+      if (buffer24Value) {
+        buffer24Value.textContent = 'Collecting';
+        buffer24Value.dataset.sherlock24hCoverage = coverage;
+        buffer24Value.title = message;
       }
       if (uploaded24Value) {
         uploaded24Value.textContent = 'Collecting';
@@ -5573,26 +5611,28 @@
     const uploaded24Node = uploaded24Card && uploaded24Card.querySelector('.num');
     if (uploaded24Node) {
       uploaded24Node.dataset.sherlock24hUploaded = String(Math.round(uploaded));
-      uploaded24Node.dataset.sherlock24hCoverage = readyTrackers + '/' + totalTrackers;
+      uploaded24Node.dataset.sherlock24hCoverage = coverage;
+      uploaded24Node.textContent = (partial ? '≈ ' : '') + localBytes(uploaded);
       uploaded24Node.setAttribute('aria-label',
-        'Uploaded in the last 24 hours: ' + localBytes(uploaded) +
-        ' across ' + totalTrackers + ' trackers');
-      uploaded24Node.title = '24h Uploaded: ' + localBytes(uploaded) +
-        ' · Coverage: ' + readyTrackers + '/' + totalTrackers + ' trackers';
+        (partial ? 'Partial ' : '') + 'Uploaded in the last 24 hours: ' +
+        localBytes(uploaded) + ' across ' + readyTrackers + '/' + totalTrackers + ' trackers');
+      uploaded24Node.title = '24h Uploaded: ' + localBytes(uploaded) + ' · ' + coverageMessage;
     }
 
     const valueNode = buffer24Value;
     if (valueNode) {
       valueNode.dataset.sherlock24hUploaded = String(Math.round(uploaded));
       valueNode.dataset.sherlock24hDownloaded = String(Math.round(downloaded));
-      valueNode.dataset.sherlock24hCoverage = readyTrackers + '/' + totalTrackers;
+      valueNode.dataset.sherlock24hCoverage = coverage;
+      valueNode.textContent = (partial ? '≈ ' : '') + signedBytes(buffer);
       valueNode.setAttribute('aria-label',
-        '24-hour buffer: ' + localBytes(uploaded) + ' uploaded minus ' +
-        localBytes(downloaded) + ' downloaded across ' + totalTrackers + ' trackers');
+        (partial ? 'Partial ' : '') + '24-hour buffer: ' + localBytes(uploaded) +
+        ' uploaded minus ' + localBytes(downloaded) + ' downloaded across ' +
+        readyTrackers + '/' + totalTrackers + ' trackers');
       valueNode.title = '24h Upload: ' + localBytes(uploaded) +
         ' · 24h Download: ' + localBytes(downloaded) +
         ' · Net Buffer: ' + signedBytes(buffer) +
-        ' · Coverage: ' + readyTrackers + '/' + totalTrackers + ' trackers';
+        ' · ' + coverageMessage;
     }
     return { uploaded, downloaded, buffer, ready: readyTrackers, total: totalTrackers, complete: true };
   }
@@ -5682,13 +5722,25 @@
     return (Array.isArray(rows) ? rows : []).map((row) => {
       const history = row && row.key && Array.isArray(all[row.key]) ? all[row.key] : [];
       const last = history.length ? history[history.length - 1] : null;
-      // Keep failed/unreadable official trackers in the denominator. A partial
-      // aggregate must never be presented as the complete dashboard total.
+      let name = '';
+      const card = row && row.card;
+      if (card && typeof card.querySelector === 'function') {
+        const heading = card.querySelector('h1,h2,h3,[data-slot="card-title"]');
+        const image = card.querySelector('img[alt]');
+        name = String(heading && heading.textContent || image && image.getAttribute('alt') || '').trim();
+      }
+      if (!name && row && row.key) {
+        const parts = String(row.key).split(/[?#]/, 1)[0].split('/').filter(Boolean);
+        name = String(parts[parts.length - 1] || 'Native tracker').replace(/[-_]+/g, ' ').toUpperCase();
+      }
+      // Keep unreadable official trackers in the denominator and identify them in the tooltip.
       if (!last || now - Number(last.at) > 60 * 60 * 1000) {
-        return { enabled: true, stats: {}, history: [], lastSync: 0 };
+        return { enabled: true, name, host: row && row.key || '', stats: {}, history: [], lastSync: 0 };
       }
       return {
         enabled: true,
+        name,
+        host: row && row.key || '',
         stats: { uploaded: Number(last.uploaded), downloaded: Number(last.downloaded) },
         history,
         lastSync: Number(last.at),
