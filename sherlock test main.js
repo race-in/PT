@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.5
+// @version      1.8.6
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2048,7 +2048,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.5';
+  const VERSION = '1.8.6';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3343,6 +3343,80 @@
   }
 
 
+  function parsePassThePopcornStats(doc, si) {
+    if (!doc || typeof doc.querySelector !== 'function') return null;
+    const stats = {};
+
+    // PTP header IDs: Up = total uploaded; Down = total downloaded.
+    const uploadedNode = doc.querySelector('#stats_seeding .user-info-bar__text');
+    const downloadedNode = doc.querySelector('#stats_leeching .user-info-bar__text');
+    const ratioNode = doc.querySelector('#stats_ratio .user-info-bar__text');
+    const uploaded = uploadedNode ? parseBytes(uploadedNode.textContent || '', si) : null;
+    const downloaded = downloadedNode ? parseBytes(downloadedNode.textContent || '', si) : null;
+    if (uploaded !== null) stats.uploaded = uploaded;
+    if (downloaded !== null) stats.downloaded = downloaded;
+
+    if (ratioNode) {
+      const ratio = parseRatio(ratioNode.textContent || '');
+      if (ratio) stats.ratio = ratio.infinite ? null : ratio.value;
+    }
+
+    const ratioLink = doc.querySelector('#stats_ratio a[title]');
+    const ratioTitle = ratioLink && ratioLink.getAttribute('title') || '';
+    const bufferMatch = ratioTitle.match(/\bBuffer\s*:\s*(\d[\d.,'’ ]*\s*[KMGTPE]?i?B)\b/i);
+    if (bufferMatch) {
+      const buffer = parseBytes(bufferMatch[1], si);
+      if (buffer !== null) stats.buffer = buffer;
+    }
+
+    // The PTP profile's first sidebar panel is explicitly headed "Stats".
+    // Do not scan Community's "Uploaded: 1 (2)" torrent count as a byte value.
+    const panels = Array.from(doc.querySelectorAll('.sidebar .panel') || []);
+    const statsPanel = panels.find((panel) => {
+      const heading = panel.querySelector('.panel__heading__title');
+      return heading && normLabel(heading.textContent) === 'stats';
+    });
+    if (statsPanel) {
+      const lines = Array.from(statsPanel.querySelectorAll('li') || [])
+        .map((node) => String(node.textContent || '').replace(/\s+/g, ' ').trim());
+      const readBytesLabel = (label) => {
+        const escaped = label.replace(/[.*+?^$|(){}[\]\\]/g, '\\$&');
+        const re = new RegExp('^' + escaped + '\\s*:\\s*(.+)$', 'i');
+        for (const line of lines) {
+          const match = line.match(re);
+          if (!match) continue;
+          const value = parseBytes(match[1], si);
+          if (value !== null) return value;
+        }
+        return null;
+      };
+      if (stats.uploaded === undefined) {
+        const value = readBytesLabel('Uploaded');
+        if (value !== null) stats.uploaded = value;
+      }
+      if (stats.downloaded === undefined) {
+        const value = readBytesLabel('Downloaded');
+        if (value !== null) stats.downloaded = value;
+      }
+      if (stats.ratio === undefined) {
+        const line = lines.find((value) => /^Ratio\s*:/i.test(value));
+        if (line) {
+          const ratio = parseRatio(line.replace(/^Ratio\s*:\s*/i, ''));
+          if (ratio) stats.ratio = ratio.infinite ? null : ratio.value;
+        }
+      }
+      const required = lines.find((value) => /^Required ratio\s*:/i.test(value));
+      if (required) {
+        const ratio = parseRatio(required.replace(/^Required ratio\s*:\s*/i, ''));
+        if (ratio) stats.required_ratio = ratio.infinite ? null : ratio.value;
+      }
+      const userClass = lines.find((value) => /^Class\s*:/i.test(value));
+      if (userClass) stats.user_class = userClass.replace(/^Class\s*:\s*/i, '').trim();
+    }
+
+    return Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded) ? stats : null;
+  }
+
   async function readPassThePopcorn(tracker, context) {
     context = context || {};
     const origin = context.origin || location.origin;
@@ -3352,50 +3426,77 @@
     const si = !!tracker.si;
     let profileLink = null;
     let profileError = null;
+
+    const readDocument = (doc, link, responseUrl, redirected) => {
+      if ((redirected && /login|signin/i.test(responseUrl || '')) ||
+          (doc && doc.querySelector && doc.querySelector('input[type="password"]'))) {
+        throw new ReadError('PassThePopcorn session expired. Sign in again and refresh.');
+      }
+      const stats = parsePassThePopcornStats(doc, si);
+      if (!stats) throw new ReadError('PTP profile HTML did not contain its account Uploaded/Downloaded values.');
+      const identity = link
+        ? identityFromProfile(link.url, link.text)
+        : { userId: tracker.userId || null, username: tracker.username || '' };
+      return {
+        kind: 'profile',
+        userId: identity.userId || tracker.userId || null,
+        username: identity.username || tracker.username || '',
+        profileUrl: link ? link.url : (tracker.profileUrl || null),
+        stats,
+      };
+    };
+
+    // Prefer PTP's profile page. Its own HTML contains all primary account stats;
+    // no /ajax.php?action=index request is needed.
     try {
       profileLink = await discoverProfile(tracker, request, origin, sourceDocument, pageUrl);
-      return await readProfile(profileLink.url, profileLink.text, si, request, origin);
+      const profileResponse = await request(profileLink.url, 'text/html');
+      const profileDoc = new DOMParser().parseFromString(profileResponse.text, 'text/html');
+      return readDocument(profileDoc, profileLink, profileResponse.url || profileLink.url, profileResponse.redirected);
     } catch (e) {
       if (!(e instanceof ReadError)) throw e;
       profileError = e;
     }
 
-    // PTP's Gazelle-style header has a dedicated signed-in stats block. Scope
-    // parsing to that block only; never scan torrent-list rows for totals.
-    let statsDocument = sourceDocument;
-    let statsRoot = statsDocument && statsDocument.querySelector
-      ? statsDocument.querySelector('#userinfo_stats') : null;
-    if (!statsRoot) {
+    // Fallback to the authenticated source page or PTP homepage header.
+    let fallbackDocument = sourceDocument;
+    let fallbackUrl = pageUrl;
+    if (!fallbackDocument) {
       try {
         const home = await request(new URL('/', origin).href, 'text/html');
-        statsDocument = new DOMParser().parseFromString(home.text, 'text/html');
-        statsRoot = statsDocument.querySelector('#userinfo_stats');
+        fallbackDocument = new DOMParser().parseFromString(home.text, 'text/html');
+        fallbackUrl = home.url || new URL('/', origin).href;
+        return readDocument(fallbackDocument, null, fallbackUrl, home.redirected);
       } catch (e) {
         if (!(e instanceof ReadError)) throw e;
+        profileError = e;
+      }
+    } else {
+      try {
+        return readDocument(fallbackDocument, null, fallbackUrl, false);
+      } catch (e) {
+        if (!(e instanceof ReadError)) throw e;
+        profileError = e;
       }
     }
-    if (statsRoot) {
-      let stats = resolveStats(extractPairs(statsRoot), si);
-      if (stats.uploaded === undefined || stats.downloaded === undefined) {
-        stats = Object.assign(stats, resolveStats(pairsFromText(statsRoot.textContent || ''), si));
-      }
-      if (Number.isFinite(stats.uploaded) && Number.isFinite(stats.downloaded)) {
-        const identity = profileLink
-          ? identityFromProfile(profileLink.url, profileLink.text)
-          : { userId: tracker.userId || null, username: tracker.username || '' };
-        return {
-          kind: 'profile',
-          userId: identity.userId || tracker.userId || null,
-          username: identity.username || tracker.username || '',
-          profileUrl: profileLink ? profileLink.url : (tracker.profileUrl || null),
-          stats,
-        };
-      }
-    }
+
     throw new ReadError(
-      'PassThePopcorn profile/header stats could not be read. ' +
-      (profileError && profileError.message ? profileError.message : 'The signed-in #userinfo_stats block was not found.')
+      'PTP stats could not be read from its profile or signed-in header. ' +
+      (profileError && profileError.message ? profileError.message : 'The PTP Uploaded/Downloaded fields were not found.')
     );
+  }
+
+  function isPassThePopcornTrackerRecord(tracker, doc) {
+    tracker = tracker || {};
+    const host = trackerHostname(tracker.host || tracker.origin);
+    const identity = trackerDirectoryEntry(tracker.name || tracker.fullName);
+    const nameKey = normalizeTrackerDirectoryName(tracker.name || tracker.fullName || '');
+    const shortKey = String(tracker.shortName || '').trim().toUpperCase();
+    return host === 'passthepopcorn.me' || host.endsWith('.passthepopcorn.me') ||
+      !!(identity && identity.name === 'PassThePopcorn') ||
+      nameKey === 'ptp' || nameKey === 'passthepopcorn' ||
+      shortKey === 'PTP' || trackerDisplayName(tracker).toUpperCase() === 'PTP' ||
+      isPassThePopcornDocument(doc);
   }
 
   function isPassThePopcornDocument(doc) {
@@ -3416,15 +3517,9 @@
     const apiType = trackerApiType(tracker);
     const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
     const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
-    const trackerNameKey = normalizeTrackerDirectoryName(tracker.name || tracker.fullName || '');
-    const trackerShortKey = String(tracker.shortName || '').trim().toUpperCase();
     const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
       !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
-    const isPassThePopcorn = trackerHost === 'passthepopcorn.me' ||
-      trackerHost.endsWith('.passthepopcorn.me') ||
-      !!(trackerIdentity && trackerIdentity.name === 'PassThePopcorn') ||
-      trackerNameKey === 'ptp' || trackerNameKey === 'passthepopcorn' ||
-      trackerShortKey === 'PTP' || isPassThePopcornDocument(sourceDocument);
+    const isPassThePopcorn = isPassThePopcornTrackerRecord(tracker, sourceDocument);
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
 
@@ -4727,10 +4822,30 @@
     }, 60000);
   }
 
+  function migrateLegacyPtpGazelleError() {
+    const migrationKey = 'sherlock.ptp.gazelle-error-migration';
+    if (GM_getValue(migrationKey, '') === VERSION) return false;
+    const all = store.trackers;
+    let changed = false;
+    Object.values(all).forEach((tracker) => {
+      if (!tracker || !isPassThePopcornTrackerRecord(tracker)) return;
+      if (!/Not a Gazelle tracker/i.test(String(tracker.lastError || ''))) return;
+      tracker.lastError = null;
+      tracker.lastAttempt = 0;
+      tracker.lastOutcome = 'retry-queued';
+      changed = true;
+    });
+    if (changed) store.trackers = all;
+    GM_setValue(migrationKey, VERSION);
+    return changed;
+  }
+
   function main() {
     registerMenus();
     const isDashboard = isSherlockDashboardPage();
     if (isDashboard) {
+      // Requeue the old generic Gazelle error once so this version immediately tests the PTP reader.
+      migrateLegacyPtpGazelleError();
       // The dashboard's own origin is the destination; no API calls are made to it.
       // Keep links pinned to the canonical public dashboard, not the VPS origin alias.
       store.url = DEFAULT_URL;
