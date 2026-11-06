@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.9
-// @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
+// @version      1.8.0
+// @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
 // @author       Sherlock
@@ -2039,7 +2039,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.9';
+  const VERSION = '1.8.0';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3384,13 +3384,21 @@
   function managerFetchText(url, accept) {
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest !== 'function') return reject(new ReadError('Userscript manager requests are unavailable.'));
+      let requestUrl;
+      try { requestUrl = new URL(url); }
+      catch (e) { return reject(new ReadError('The tracker request URL is invalid.')); }
       GM_xmlhttpRequest({
         method: 'GET',
-        url,
+        url: requestUrl.href,
         headers: { Accept: accept || '*/*' },
         responseType: 'text',
         timeout: 25000,
         anonymous: false,
+        // Tampermonkey 5.6+ may otherwise use the dashboard tab's cookie partition
+        // instead of the tracker tab's first-party partition. Violentmonkey ignores
+        // these Tampermonkey-specific options and continues with its normal GM request.
+        fetch: true,
+        cookiePartition: { topLevelSite: requestUrl.origin },
         onload: (response) => {
           const status = Number(response.status) || 0;
           const text = typeof response.responseText === 'string' ? response.responseText
@@ -4281,9 +4289,13 @@
       const updatedLabel = tracker.lastSync
         ? 'Last successful update: ' + new Date(Number(tracker.lastSync)).toLocaleString()
         : 'No successful update yet';
+      const lastAttemptLabel = tracker.lastAttempt
+        ? 'Last attempt: ' + new Date(Number(tracker.lastAttempt)).toLocaleString()
+        : 'Not attempted yet';
+      const errorText = tracker.lastError ? String(tracker.lastError) : '';
       const status = tracker.lastError
-        ? h('span', { class: 'tag-down', title: String(tracker.lastError) }, 'Error')
-        : h('span', { class: 'tag-up', title: updatedLabel }, 'OK');
+        ? h('span', { class: 'tag-down', title: errorText }, 'Error')
+        : h('span', { class: 'tag-up', title: updatedLabel }, tracker.lastSync ? 'OK' : 'Waiting');
 
       const card = h('a', {
         class: 'card flex h-full min-w-0 flex-col p-4 hover:border-line-strong',
@@ -4300,6 +4312,10 @@
           }, trackerDisplayName(tracker)),
           status
         ),
+        h('p', {
+          class: 'mt-1 text-xs text-muted truncate',
+          title: errorText || updatedLabel + ' · ' + lastAttemptLabel,
+        }, errorText ? 'Update failed: ' + errorText : (tracker.lastSync ? updatedLabel : lastAttemptLabel)),
         h('dl', { class: 'mt-4 grid grid-cols-3 gap-3 text-sm' },
           h('div', {},
             h('dt', { class: 'eyebrow' }, 'Buffer'),
