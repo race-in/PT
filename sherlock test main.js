@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.2
+// @version      1.8.3
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2048,7 +2048,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.2';
+  const VERSION = '1.8.3';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3374,9 +3374,11 @@
     // authenticated profile reader after its non-stock /ajax.php endpoint fails.
     const kinds = isAnimeBytes
       ? (tracker.kind === 'profile' ? ['profile'] : ['gazelle', 'profile'])
-      : (apiType === 'gazelle'
+      // A saved record may retain kind="gazelle" even when its mirror/alias host
+      // is not in the directory. Never let that bypass the profile-page fallback.
+      : (apiType === 'gazelle' || tracker.kind === 'gazelle'
         ? ['gazelle', 'profile']
-        : (tracker.kind === 'gazelle' || tracker.kind === 'profile' ? [tracker.kind] : ['gazelle', 'profile']));
+        : (tracker.kind === 'profile' ? ['profile'] : ['gazelle', 'profile']));
     let lastError;
     for (const kind of kinds) {
       try {
