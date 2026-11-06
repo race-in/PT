@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.6
+// @version      1.7.7
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.6';
+  const VERSION = '1.7.7';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3339,10 +3339,16 @@
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
     const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
     const apiType = trackerApiType(tracker);
+    const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
+    const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
+    const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
+      !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
 
-    if (apiType === 'unit3d' || (!apiType && hasUnit3DStatsBar(sourceDocument))) return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
+    // AnimeBytes may share generic #userinfo_stats markup with older UNIT3D
+    // themes. Its host/identity exception must win before the DOM fallback.
+    if (!isAnimeBytes && (apiType === 'unit3d' || (!apiType && hasUnit3DStatsBar(sourceDocument)))) return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
     if (apiType === 'gazelle') return complete(readGazelle(request));
     if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
     if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
@@ -3354,10 +3360,6 @@
     if (apiType === 'cinemageddon' || isCinemageddonDocument(sourceDocument)) return complete(readCinemageddon(tracker, { origin, request, document: sourceDocument, pageUrl }));
 
     const si = !!tracker.si;
-    const trackerHost = trackerHostname(tracker.host || tracker.origin || origin);
-    const trackerIdentity = trackerDirectoryEntry(tracker.name || tracker.fullName);
-    const isAnimeBytes = trackerHost === 'animebytes.tv' || trackerHost.endsWith('.animebytes.tv') ||
-      !!(trackerIdentity && trackerIdentity.name === 'AnimeBytes');
     // Old saved AnimeBytes records may already say "gazelle". Still allow the
     // authenticated profile reader after its non-stock /ajax.php endpoint fails.
     const kinds = isAnimeBytes
