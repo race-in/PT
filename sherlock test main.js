@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.2
+// @version      1.7.3
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.2';
+  const VERSION = '1.7.3';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2309,10 +2309,10 @@
   // UNIT3D shows upload, download, ratio, bonus and seeding in a bar on every page: class names say which.
   function hasUnit3DStatsBar(doc) {
     if (!doc || typeof doc.querySelector !== 'function') return false;
-    // #userinfo_stats is also used by non-UNIT3D themes, including Gazelle layouts.
-    // Only UNIT3D-specific ratio-bar markup is a safe generic fallback.
+    // #userinfo_stats is ambiguous on its own. Known Gazelle/UNIT3D trackers are
+    // classified by trackerApiType() first; this legacy fallback is only for unknown sites.
     return !!doc.querySelector(
-      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"]'
+      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"], #userinfo_stats'
     );
   }
 
