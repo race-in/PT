@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.6
+// @version      1.6.7
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -197,6 +197,7 @@
   function knownTrackerDisplayName(host, origin, kind, doc) {
     const hosts = [trackerHostname(host), trackerHostname(origin)].filter(Boolean);
     const matches = (fn) => hosts.some((value) => fn(value));
+    if (matches(isCinematikHost)) return 'Cinematik';
     if (matches(isDesiGaaneHost)) return 'DesiGaane';
     if (kind === 'digitalcore' || matches(isDigitalCoreHost)) return 'DigitalCore';
     if (kind === 'torrentleech' || matches(isTorrentLeechHost) || isTorrentLeechDocument(doc)) return 'TorrentLeech';
@@ -691,6 +692,11 @@
     return host === 'digitalcore.club' || host.endsWith('.digitalcore.club');
   }
 
+  function isCinematikHost(value) {
+    const host = trackerHostname(value);
+    return host === 'cinematik.net' || host.endsWith('.cinematik.net');
+  }
+
   function isDesiGaaneHost(value) {
     const host = trackerHostname(value);
     return host === 'desigaane.rocks' || host.endsWith('.desigaane.rocks');
@@ -705,7 +711,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -714,7 +720,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.6';
+  const VERSION = '1.6.7';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -984,17 +990,30 @@
   }
 
   // UNIT3D shows upload, download, ratio, bonus and seeding in a bar on every page: class names say which.
+  function hasUnit3DStatsBar(doc) {
+    if (!doc || typeof doc.querySelector !== 'function') return false;
+    return !!doc.querySelector(
+      '.ratio-bar, [class*="top-nav__ratio-bar"], [class*="ratio-bar__uploaded"], [class*="ratio-bar__downloaded"], #userinfo_stats'
+    );
+  }
+
   function unit3dBar(doc, si) {
-    const bar = doc.querySelector('.ratio-bar, [class*="ratio-bar"]');
-    if (!bar) return {};
+    if (!doc || typeof doc.querySelectorAll !== 'function') return {};
     const out = {};
-    const keys = { uploaded: 'uploaded', downloaded: 'downloaded', ratio: 'ratio', points: 'bonus_points', bonus: 'bonus_points', seeding: 'seeding', leeching: 'leeching', buffer: 'buffer' };
-    bar.querySelectorAll('[class*="ratio-bar__"]').forEach((el) => {
-      const m = el.className.match(/ratio-bar__([a-z_-]+)/);
+    const keys = {
+      uploaded: 'uploaded', downloaded: 'downloaded', ratio: 'ratio',
+      points: 'bonus_points', bonus: 'bonus_points',
+      seeding: 'seeding', leeching: 'leeching', buffer: 'buffer',
+    };
+    doc.querySelectorAll('[class*="ratio-bar__"]').forEach((el) => {
+      const classText = typeof el.className === 'string'
+        ? el.className
+        : (el.getAttribute('class') || '');
+      const m = classText.match(/(?:^|\\s)ratio-bar__([a-z_-]+)/);
       const key = m && keys[m[1]];
       if (!key || key in out) return;
-      const v = fits(key, el.textContent.replace(/\s+/g, ' '), si);
-      if (v !== undefined) out[key] = v;
+      const value = fits(key, String(el.textContent || '').replace(/\\s+/g, ' '), si);
+      if (value !== undefined) out[key] = value;
     });
     return out;
   }
@@ -1912,6 +1931,7 @@
       if (tracker && tracker.origin) hostname = new URL(tracker.origin).hostname;
     } catch (e) { /* fall back to the saved host */ }
     hostname = String(hostname).toLowerCase().replace(/^www\./, '');
+    if (isCinematikHost(hostname)) return 'unit3d';
     if (hostname === 'digitalcore.club' || hostname.endsWith('.digitalcore.club')) return 'digitalcore';
     if (hostname === 'superbits.org' || hostname.endsWith('.superbits.org')) return 'rartracker';
     if (isIptorrentsHost(hostname)) return 'iptorrents';
@@ -1921,6 +1941,54 @@
     if (isFileListTracker(tracker)) return 'filelist';
     if (isCinemageddonTracker(tracker)) return 'cinemageddon';
     return null;
+  }
+
+  async function readUnit3D(tracker, context) {
+    context = context || {};
+    const origin = context.origin || location.origin;
+    const request = context.request || fetchText;
+    const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
+    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
+    const si = !!tracker.si;
+
+    let profileLink = sourceDocument
+      ? findProfileLink(sourceDocument, pageUrl, origin)
+      : null;
+    let statsDocument = sourceDocument;
+
+    // UNIT3D-rs and standard UNIT3D expose the member's own link in the header.
+    // If the current page doesn't contain it (e.g. a partial navigation), inspect the home page.
+    if (!profileLink) {
+      const home = await request(new URL('/', origin).href, 'text/html');
+      statsDocument = new DOMParser().parseFromString(home.text, 'text/html');
+      profileLink = findProfileLink(statsDocument, home.url || (origin + '/'), origin);
+    }
+    if (!profileLink) {
+      throw new ReadError('Could not find your Cinematik profile link in the UNIT3D header.');
+    }
+
+    // UNIT3D publishes exact upload/download counters in its ratio bar on all authenticated pages.
+    // Read these directly first; fall back to the member profile page if the bar isn't present.
+    let stats = {};
+    if (statsDocument) {
+      stats = Object.assign({}, resolveStats(extractPairs(statsDocument), si), unit3dBar(statsDocument, si));
+      if (stats.uploaded === undefined || stats.downloaded === undefined) {
+        Object.assign(stats, resolveStats(pairsFromText(plainText(statsDocument)), si));
+      }
+    }
+
+    if (stats.uploaded === undefined || stats.downloaded === undefined) {
+      return readProfile(profileLink.url, profileLink.text, si, request, origin);
+    }
+
+    const ident = identityFromProfile(profileLink.url, profileLink.text);
+    return {
+      kind: 'profile',
+      userId: ident.userId,
+      username: ident.username,
+      profileUrl: profileLink.url,
+      stats,
+    };
   }
 
   async function readTracker(tracker, context) {
@@ -1933,6 +2001,7 @@
     const complete = async (result) =>
       attachProfileAddress(await result, tracker, { origin, document: sourceDocument, pageUrl }, request);
 
+    if (apiType === 'unit3d') return complete(readUnit3D(tracker, { origin, request, document: sourceDocument, pageUrl }));
     if (apiType === 'digitalcore') return complete(readDigitalCore(tracker, request));
     if (apiType === 'rartracker') return complete(readRartracker(tracker, request));
     if (apiType === 'iptorrents') return complete(readIptorrents(tracker, { origin, request, document: sourceDocument, pageUrl }));
@@ -2970,6 +3039,14 @@
       return true;
     }
     const detectedApiType = trackerApiType({ host: HOST, origin: location.origin });
+    if (detectedApiType === 'unit3d') {
+      const versionKey = 'sherlock.cinematik.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
+      return hasUnit3DStatsBar(document) && !document.querySelector('input[type="password"]');
+    }
     if (detectedApiType) {
       // Upgrade migration clears stale cooldowns for API-based adapters, including DigitalCore.
       const versionKey = 'sherlock.autodetect.version.' + PAGE_HOST;
@@ -2979,7 +3056,14 @@
       }
       return !document.querySelector('input[type="password"]');
     }
-    if (document.querySelector('.ratio-bar, #userinfo_stats')) return true;
+    if (hasUnit3DStatsBar(document)) {
+      const versionKey = 'sherlock.unit3d.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+      }
+      return !document.querySelector('input[type="password"]');
+    }
     const head = ((document.body && document.body.innerText) || '').slice(0, 6000);
     return /\b(upload(ed)?|up)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(head) && /\b(download(ed)?|down)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(head);
   }
