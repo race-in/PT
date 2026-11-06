@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.9
+// @version      1.11.0
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/5.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.9';
+  const VERSION = '1.11.0';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5401,9 +5401,16 @@
       !(candidate.matches && candidate.matches('a[href^="/trackers/"]'))
     );
     const cards = Array.from(new Set(preferredCards.concat(otherCards)));
-    const card = cards.find((candidate) => {
-      const text = (candidate.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      return /\bbuffer\b/.test(text) && /(?:last\s*)?24\s*(?:h\b|hours?\b)/.test(text);
+    let card = preferredCards.find((candidate) => {
+      const label = candidate.querySelector('.eyebrow');
+      return /^buffer,?\s*(?:last\s*)?24\s*(?:h\b|hours?\b)$/i.test(
+        String(label && label.textContent || '').replace(/\s+/g, ' ').trim()
+      );
+    }) || otherCards.find((candidate) => {
+      const label = candidate.querySelector('.eyebrow');
+      return /^buffer,?\s*(?:last\s*)?24\s*(?:h\b|hours?\b)$/i.test(
+        String(label && label.textContent || '').replace(/\s+/g, ' ').trim()
+      );
     });
     // Keep five equal, aligned summary boxes:
     // Total Buffer | Total Uploaded | Total Downloaded |
@@ -5455,8 +5462,47 @@
       }
       delete uploaded24Card.dataset.sherlockTotalDownloaded;
 
-      const bufferLabel = card && card.querySelector('.eyebrow');
+      // Always provide a real Buffer-24h card with the same DOM as the other
+      // summary metrics. Previously the value update depended on finding a
+      // pre-existing native Buffer-24h node, while Uploaded-24h was cloned.
+      let buffer24Card = Array.from(summarySection.children).find((candidate) =>
+        candidate.dataset && candidate.dataset.sherlock24hBufferCard === 'true'
+      ) || Array.from(summarySection.children).find((candidate) =>
+        summaryLabel(candidate) === 'buffer, last 24 hours'
+      ) || card;
+
+      if (buffer24Card &&
+          (!buffer24Card.querySelector('.eyebrow') || !buffer24Card.querySelector('.num'))) {
+        buffer24Card.remove();
+        buffer24Card = null;
+      }
+      if (!buffer24Card) {
+        const totalUploadedCard = Array.from(summarySection.children).find((candidate) =>
+          summaryLabel(candidate) === 'total uploaded'
+        );
+        if (!totalUploadedCard) return null;
+        buffer24Card = totalUploadedCard.cloneNode(true);
+        buffer24Card.dataset.sherlock24hBufferCard = 'true';
+        buffer24Card.removeAttribute('id');
+        buffer24Card.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
+      }
+
+      buffer24Card.dataset.sherlock24hBufferCard = 'true';
+      const bufferLabel = buffer24Card.querySelector('.eyebrow');
+      const bufferValue = buffer24Card.querySelector('.num');
       if (bufferLabel) bufferLabel.textContent = 'Buffer, last 24 hours';
+      if (bufferValue) {
+        bufferValue.textContent = 'Collecting';
+        bufferValue.removeAttribute('title');
+        bufferValue.removeAttribute('aria-label');
+        delete bufferValue.dataset.sherlockNativeBytes;
+        delete bufferValue.dataset.sherlockLastOutputTitle;
+        delete bufferValue.dataset.sherlock24hCoverage;
+        delete bufferValue.dataset.sherlock24hUploaded;
+        delete bufferValue.dataset.sherlock24hDownloaded;
+      }
+      delete buffer24Card.dataset.sherlockTotalDownloaded;
+      card = buffer24Card;
 
       // Deterministic order: five equal cards, side by side on desktop.
       const ordered = [
@@ -5491,6 +5537,7 @@
     }
 
     const uploaded24Value = uploaded24Card && uploaded24Card.querySelector('.num');
+    const buffer24Value = card && card.querySelector('.num');
 
     const customTraffic = sumTrackerTraffic24h(customTrackers);
     const nativeTraffic = sumTrackerTraffic24h(nativeTrackers);
@@ -5503,9 +5550,8 @@
       const coverage = readyTrackers + '/' + totalTrackers;
       const message = 'Collecting 24-hour upload/download history: ' +
         readyTrackers + '/' + totalTrackers + ' trackers have a complete window.';
-      const valueNode = card && card.querySelector('.num');
+      const valueNode = buffer24Value;
       if (valueNode) {
-        // Never leave an old/stale zero visible while the local 24-hour window is incomplete.
         valueNode.textContent = 'Collecting';
         valueNode.dataset.sherlock24hCoverage = coverage;
         valueNode.title = message;
@@ -5520,9 +5566,9 @@
 
     const uploaded = customTraffic.uploaded + nativeTraffic.uploaded;
     const downloaded = customTraffic.downloaded + nativeTraffic.downloaded;
-    const buffer = uploaded - downloaded;
-    if (card) writeDashboardMetric(card, buffer);
-    if (uploaded24Card) writeDashboardMetric(uploaded24Card, uploaded);
+    const buffer = customTraffic.buffer + nativeTraffic.buffer;
+    if (buffer24Value) writeDashboardMetric(card, buffer);
+    if (uploaded24Value) writeDashboardMetric(uploaded24Card, uploaded);
 
     const uploaded24Node = uploaded24Card && uploaded24Card.querySelector('.num');
     if (uploaded24Node) {
@@ -5535,7 +5581,7 @@
         ' · Coverage: ' + readyTrackers + '/' + totalTrackers + ' trackers';
     }
 
-    const valueNode = card && card.querySelector('.num');
+    const valueNode = buffer24Value;
     if (valueNode) {
       valueNode.dataset.sherlock24hUploaded = String(Math.round(uploaded));
       valueNode.dataset.sherlock24hDownloaded = String(Math.round(downloaded));
