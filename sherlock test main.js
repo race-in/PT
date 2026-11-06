@@ -1431,7 +1431,13 @@
 ]);
   const TRACKER_DIRECTORY_BY_NAME = new Map();
   TRACKER_DIRECTORY.forEach((entry) => {
-    TRACKER_DIRECTORY_BY_NAME.set(normalizeTrackerDirectoryName(entry.name), entry);
+    const key = normalizeTrackerDirectoryName(entry.name);
+    TRACKER_DIRECTORY_BY_NAME.set(key, entry);
+    // Parenthetical names in the source also act as aliases (for example, SnowPT).
+    const baseAlias = normalizeTrackerDirectoryName(entry.name.replace(/\s*\([^)]*\)\s*$/, ''));
+    if (baseAlias && baseAlias !== key && !TRACKER_DIRECTORY_BY_NAME.has(baseAlias)) {
+      TRACKER_DIRECTORY_BY_NAME.set(baseAlias, entry);
+    }
   });
 
   function normalizeTrackerDirectoryName(value) {
