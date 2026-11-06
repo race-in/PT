@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.0
+// @version      1.9.1
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2053,7 +2053,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, trackerTraffic24h, trackerDownloaded24h, sumTrackerTraffic24h, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, hasUnit3DStatsBar, unit3dBar, isCinematikHost, isBlutopiaHost, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, isPolishTrackerHost, isPolishTrackerDocument, canonicalSavedTrackerName, trackerDirectory: TRACKER_DIRECTORY, trackerDirectoryEntry, trackerDirectoryHostEntry, validateTrackerIdentity, trackerDisplayName, normalizeTrackerDirectoryName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, trackerApiType, sherlockDashboardUrl };
     }
     return;
   }
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.0';
+  const VERSION = '1.9.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4186,20 +4186,25 @@
       .slice(-576);
   }
 
-  function trackerDownloaded24h(tracker) {
+  // Calculate both traffic directions against one interpolated 24-hour boundary.
+  // Missing history and counter resets are never converted into fabricated traffic.
+  function trackerTraffic24h(tracker) {
     const stats = tracker && tracker.stats || {};
-    const current = Number(stats.downloaded);
-    const currentAt = Number(tracker && tracker.lastSync) || Date.now();
-    if (!Number.isFinite(current) || current < 0 || !Number.isFinite(currentAt)) return null;
+    const currentUploaded = Number(stats.uploaded);
+    const currentDownloaded = Number(stats.downloaded);
+    const currentAt = Number(tracker && tracker.lastSync);
+
+    if (!Number.isFinite(currentUploaded) || currentUploaded < 0 ||
+        !Number.isFinite(currentDownloaded) || currentDownloaded < 0 ||
+        !Number.isFinite(currentAt) || currentAt <= 0) return null;
 
     const cutoff = currentAt - 24 * 60 * 60 * 1000;
     const points = (Array.isArray(tracker && tracker.history) ? tracker.history : [])
       .filter((point) => point &&
-        Number.isFinite(Number(point.at)) &&
-        Number.isFinite(Number(point.downloaded)) &&
-        Number(point.downloaded) >= 0 &&
-        Number(point.at) > 0 &&
-        Number(point.at) <= currentAt)
+        Number.isFinite(Number(point.at)) && Number(point.at) > 0 &&
+        Number(point.at) <= currentAt &&
+        Number.isFinite(Number(point.uploaded)) && Number(point.uploaded) >= 0 &&
+        Number.isFinite(Number(point.downloaded)) && Number(point.downloaded) >= 0)
       .slice()
       .sort((a, b) => Number(a.at) - Number(b.at));
 
@@ -4208,41 +4213,80 @@
     let before = null;
     let after = null;
     for (const point of points) {
-      const at = Number(point.at);
-      if (at <= cutoff) before = point;
-      else {
-        after = point;
-        break;
-      }
+      if (Number(point.at) <= cutoff) before = point;
+      else { after = point; break; }
     }
     if (!before) return null;
 
     const beforeAt = Number(before.at);
+    const beforeUploaded = Number(before.uploaded);
     const beforeDownloaded = Number(before.downloaded);
-    let baseline = beforeDownloaded;
+    let baselineUploaded = beforeUploaded;
+    let baselineDownloaded = beforeDownloaded;
     let baselineAt = beforeAt;
 
     if (after) {
       const afterAt = Number(after.at);
+      const afterUploaded = Number(after.uploaded);
       const afterDownloaded = Number(after.downloaded);
       const span = afterAt - beforeAt;
-      if (span > 0) {
-        const progress = Math.max(0, Math.min(1, (cutoff - beforeAt) / span));
-        baseline = beforeDownloaded + (afterDownloaded - beforeDownloaded) * progress;
-        baselineAt = cutoff;
-      }
+      if (span <= 0 || afterUploaded < beforeUploaded || afterDownloaded < beforeDownloaded) return null;
+
+      const progress = Math.max(0, Math.min(1, (cutoff - beforeAt) / span));
+      baselineUploaded = beforeUploaded + (afterUploaded - beforeUploaded) * progress;
+      baselineDownloaded = beforeDownloaded + (afterDownloaded - beforeDownloaded) * progress;
+      baselineAt = cutoff;
     } else if (cutoff - beforeAt > 60 * 60 * 1000) {
-      // Do not pretend a much older sample represents the exact 24-hour boundary.
       return null;
     }
 
+    if (currentUploaded < baselineUploaded || currentDownloaded < baselineDownloaded) return null;
+
+    const uploaded = currentUploaded - baselineUploaded;
+    const downloaded = currentDownloaded - baselineDownloaded;
     return {
-      value: current - baseline,
+      uploaded,
+      downloaded,
+      buffer: uploaded - downloaded,
       baselineAt,
       currentAt,
-      baseline: Math.round(baseline),
-      current: Math.round(current),
+      baselineUploaded: Math.round(baselineUploaded),
+      baselineDownloaded: Math.round(baselineDownloaded),
+      currentUploaded: Math.round(currentUploaded),
+      currentDownloaded: Math.round(currentDownloaded),
     };
+  }
+
+  function trackerDownloaded24h(tracker) {
+    const traffic = trackerTraffic24h(tracker);
+    if (!traffic) return null;
+    return {
+      value: traffic.downloaded,
+      baselineAt: traffic.baselineAt,
+      currentAt: traffic.currentAt,
+      baseline: traffic.baselineDownloaded,
+      current: traffic.currentDownloaded,
+    };
+  }
+
+  function sumTrackerTraffic24h(customTrackers) {
+    const trackers = (Array.isArray(customTrackers) ? customTrackers : [])
+      .filter((tracker) => tracker && tracker.enabled !== false);
+    let uploaded = 0;
+    let downloaded = 0;
+    let buffer = 0;
+    let ready = 0;
+
+    trackers.forEach((tracker) => {
+      const traffic = trackerTraffic24h(tracker);
+      if (!traffic) return;
+      uploaded += traffic.uploaded;
+      downloaded += traffic.downloaded;
+      buffer += traffic.buffer;
+      ready++;
+    });
+
+    return { uploaded, downloaded, buffer, ready, total: trackers.length, complete: ready === trackers.length };
   }
 
   async function push(t, opts) {
@@ -4265,8 +4309,15 @@
     const nextBuffer = customTrackerBuffer(nextStats, 'one_to_one');
     t.createdAt = Number(t.createdAt) || now;
     t.history = Array.isArray(t.history) ? t.history : [];
-    // Keep timestamped Uploaded/Downloaded observations for the rolling 24-hour metric.
-    if (nextBuffer !== null) recordTrackerHistory(t, nextStats, nextBuffer, now);
+    // Store both cumulative counters on every valid observation. The 24h net
+    // buffer is calculated later from their deltas, never from lifetime totals.
+    const hasTrafficTotals =
+      Number.isFinite(Number(nextStats.uploaded)) && Number(nextStats.uploaded) >= 0 &&
+      Number.isFinite(Number(nextStats.downloaded)) && Number(nextStats.downloaded) >= 0;
+    if (hasTrafficTotals) {
+      const historyBuffer = Number(nextStats.uploaded) - Number(nextStats.downloaded);
+      recordTrackerHistory(t, nextStats, historyBuffer, now);
+    }
     t.stats = nextStats;
     t.lastSync = now;
     t.lastError = null;
@@ -4440,6 +4491,55 @@
     writeDashboardMetric(bufferCard, totals.buffer);
     writeDashboardMetric(uploadedCard, totals.uploaded);
     return bufferBasis;
+  }
+
+  function updateDashboard24hBuffer(customTrackers) {
+    const main = document.querySelector('main') || document.querySelector('#main') || document.body;
+    const bufferLabelPattern = /^total buffer(?: at required ratio)?$/;
+    const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
+      const cards = Array.from(section.children).filter((child) => child.classList.contains('card'));
+      const labels = cards.map((card) => {
+        const label = card.querySelector('.eyebrow');
+        return (label && label.textContent || '').trim().toLowerCase();
+      });
+      return labels.some((label) => bufferLabelPattern.test(label)) &&
+        labels.includes('total uploaded');
+    });
+
+    const preferredCards = summarySection
+      ? Array.from(summarySection.children).filter((child) => child.classList.contains('card'))
+      : [];
+    const otherCards = Array.from(main.querySelectorAll('section .card')).filter((candidate) =>
+      !candidate.hasAttribute('data-sherlock-custom-host') &&
+      !candidate.closest('#sherlock-local-trackers') &&
+      !(candidate.matches && candidate.matches('a[href^="/trackers/"]'))
+    );
+    const cards = Array.from(new Set(preferredCards.concat(otherCards)));
+    const card = cards.find((candidate) => {
+      const text = (candidate.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return /\bbuffer\b/.test(text) && /(?:last\s*)?24\s*(?:h\b|hours?\b)/.test(text);
+    });
+    if (!card) return null;
+
+    const nativeBuffer24h = readNativeMetricBytes(card);
+    if (nativeBuffer24h === null) return null;
+
+    const traffic = sumTrackerTraffic24h(customTrackers);
+    // Do not publish a partial total as though every enabled tracker were counted.
+    if (!traffic.total || !traffic.complete) return null;
+
+    writeDashboardMetric(card, nativeBuffer24h + traffic.buffer);
+    const valueNode = card.querySelector('.num');
+    if (valueNode) {
+      valueNode.dataset.sherlock24hUploaded = String(Math.round(traffic.uploaded));
+      valueNode.dataset.sherlock24hDownloaded = String(Math.round(traffic.downloaded));
+      valueNode.dataset.sherlock24hCoverage = traffic.ready + '/' + traffic.total;
+      valueNode.setAttribute('aria-label',
+        '24-hour buffer includes ' + localBytes(traffic.uploaded) + ' uploaded minus ' +
+        localBytes(traffic.downloaded) + ' downloaded from all ' +
+        traffic.total + ' enabled browser-local trackers');
+    }
+    return traffic;
   }
 
 
@@ -4644,6 +4744,8 @@
 
     // Expand the summary and native tracker cards to four metrics.
     const bufferBasis = updateDashboardTotals(trackers) || 'one_to_one';
+    // Update only the dedicated 24-hour Buffer card; preserve lifetime Total Buffer.
+    updateDashboard24hBuffer(trackers);
     const dashboardMain = document.querySelector('main') || document.querySelector('#main') || document.body;
     // Keep Sherlock's original centered max-width dashboard area.
     // The summary row and tracker grid share this same centered width.
