@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.9.3
+// @version      1.9.4
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.9.3';
+  const VERSION = '1.9.4';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4519,6 +4519,9 @@
     if (!totalTrackers || !customTraffic.complete || !nativeTraffic.complete) {
       const valueNode = card.querySelector('.num');
       if (valueNode) {
+        // Avoid leaving Sherlock's old/stale 0 B value visible while the new
+        // local 24-hour history window is still being collected.
+        valueNode.textContent = 'Collecting';
         valueNode.dataset.sherlock24hCoverage = readyTrackers + '/' + totalTrackers;
         valueNode.title = 'Collecting 24-hour upload/download history: ' +
           readyTrackers + '/' + totalTrackers + ' trackers have a complete window.';
