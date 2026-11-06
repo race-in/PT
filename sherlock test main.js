@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.6.5
+// @version      1.6.6
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -705,7 +705,7 @@
   // Not in a browser (or no userscript manager): hand the helpers to a test runner and stop.
   if (typeof window === 'undefined' || typeof GM_getValue === 'undefined') {
     if (typeof module !== 'undefined') {
-      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
+      module.exports = { parseLocaleNumber, parseBytes, parseCount, parseRatio, normLabel, resolveStats, pairsFromText, sizeLabel, guessName, shortNameOf, customTrackerBuffer, calculateDashboardTotals, sumVerifiedDownloads, removeNativeTrackerFooter, centerTrackerMetrics, apiByteNumber, mapRartrackerStatus, mapDigitalCoreStatus, mapIptStatValues, mapIptProfileDetails, isIptorrentsHost, normalizeIptorrentsTrackerStore, isDigitalCoreHost, trackerNameForNewTracker, trackerHostname, cleanTrackerDisplayName, knownTrackerDisplayName, isDesiGaaneHost, canonicalSavedTrackerName, localRatio, profileAddressFromDocument, isTorrentLeechHost, isTorrentLeechDocument, isTorrentLeechTracker, mapTorrentLeechProfileRows, parseTorrentLeechDocument, isCinemageddonHost, isCinemageddonDocument, isCinemageddonTracker, mapCinemageddonProfileRows, isFileListHost, isFileListDocument, isFileListTracker, mapFileListProfileRows, isMyAnonamouseHost, isMyAnonamouseDocument, isMyAnonamouseTracker, mapMyAnonamouseProfileRows, isTranceTrafficHost, tranceTrafficStatusLink, isTranceTrafficDocument, isTranceTrafficTracker, mapTranceTrafficProfileRows, sherlockDashboardUrl };
     }
     return;
   }
@@ -714,7 +714,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.6.5';
+  const VERSION = '1.6.6';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -2591,6 +2591,22 @@
     return removed;
   }
 
+  function centerTrackerMetrics(dl) {
+    if (!dl) return;
+    dl.classList.remove('grid-cols-4');
+    dl.classList.add('grid-cols-3', 'w-full');
+
+    Array.from(dl.children).forEach((field) => {
+      field.classList.add('min-w-0', 'text-center');
+      const label = field.querySelector('dt');
+      if (label) label.classList.add('text-center');
+      const valueCell = field.querySelector('dd');
+      if (valueCell) valueCell.classList.add('text-center');
+      const value = valueCell && valueCell.querySelector('.num');
+      if (value) value.classList.add('block', 'text-center');
+    });
+  }
+
   function ensureNativeDownloadedField(card) {
     const dl = card && card.querySelector('dl');
     if (!dl) return null;
@@ -2600,8 +2616,7 @@
       const label = field.querySelector('dt');
       if (label && /^24h$/i.test((label.textContent || '').trim())) field.remove();
     });
-    dl.classList.remove('grid-cols-4');
-    dl.classList.add('grid-cols-3');
+    centerTrackerMetrics(dl);
 
     let field = dl.querySelector('[data-sherlock-native-downloaded]');
     if (!field) {
@@ -2618,6 +2633,7 @@
       if (ratioField) ratioField.after(field);
       else dl.appendChild(field);
     }
+    centerTrackerMetrics(dl);
     return field.querySelector('.num');
   }
 
@@ -2862,6 +2878,7 @@
           )
         )
       );
+      centerTrackerMetrics(card.querySelector('dl'));
 
       section.appendChild(card);
     });
