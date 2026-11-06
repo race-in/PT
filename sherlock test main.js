@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.8.7
+// @version      1.8.8
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2062,7 +2062,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.8.7';
+  const VERSION = '1.8.8';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -3524,6 +3524,106 @@
       !!doc.querySelector('#userinfo_username a[href*="user.php?id="]');
   }
 
+  function polishTrackerApiValue(object, names) {
+    if (!object || typeof object !== 'object') return undefined;
+    for (const name of names) if (Object.prototype.hasOwnProperty.call(object, name) && object[name] !== null && object[name] !== undefined && object[name] !== '') return object[name];
+    return undefined;
+  }
+
+  function findPolishTrackerApiObject(root, predicate, depth, seen) {
+    depth = depth || 0;
+    seen = seen || new Set();
+    if (!root || typeof root !== 'object' || Array.isArray(root) || seen.has(root) || depth > 6) return null;
+    seen.add(root);
+    if (predicate(root)) return root;
+    for (const key of Object.keys(root).slice(0, 60)) {
+      const child = root[key];
+      if (child && typeof child === 'object') {
+        const found = findPolishTrackerApiObject(child, predicate, depth + 1, seen);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function polishTrackerApiBytes(value, si) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
+    const text = String(value).trim();
+    const numeric = Number(text);
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : parseBytes(text, si);
+  }
+
+  function mapPolishTrackerApiPayload(payload, si) {
+    const upNames = ['uploaded', 'upload', 'uploaded_bytes', 'uploadedBytes', 'total_uploaded', 'totalUploaded', 'uploaded_total', 'uploadedTotal', 'up'];
+    const downNames = ['downloaded', 'download', 'downloaded_bytes', 'downloadedBytes', 'total_downloaded', 'totalDownloaded', 'downloaded_total', 'downloadedTotal', 'down'];
+    const account = findPolishTrackerApiObject(payload, (value) =>
+      polishTrackerApiValue(value, upNames) !== undefined && polishTrackerApiValue(value, downNames) !== undefined);
+    if (!account) return null;
+    const identity = findPolishTrackerApiObject(payload, (value) =>
+      polishTrackerApiValue(value, ['id', 'user_id', 'userId', 'uuid']) !== undefined ||
+      polishTrackerApiValue(value, ['username', 'user_name', 'userName', 'login']) !== undefined);
+    const uploaded = polishTrackerApiBytes(polishTrackerApiValue(account, upNames), si);
+    const downloaded = polishTrackerApiBytes(polishTrackerApiValue(account, downNames), si);
+    if (!Number.isFinite(uploaded) || !Number.isFinite(downloaded)) return null;
+
+    const stats = { uploaded, downloaded };
+    const ratioRaw = polishTrackerApiValue(account, ['ratio', 'share_ratio', 'shareRatio', 'sharing_ratio', 'sharingRatio']) ??
+      (identity ? polishTrackerApiValue(identity, ['ratio', 'share_ratio', 'shareRatio']) : undefined);
+    if (ratioRaw !== undefined) {
+      const ratio = parseRatio(String(ratioRaw));
+      if (ratio) stats.ratio = ratio.infinite ? null : ratio.value;
+    }
+    const bufferRaw = polishTrackerApiValue(account, ['buffer', 'seed_buffer', 'seedBuffer', 'upload_buffer', 'uploadBuffer']);
+    if (bufferRaw !== undefined) {
+      const buffer = polishTrackerApiBytes(bufferRaw, si);
+      if (buffer !== null) stats.buffer = buffer;
+    }
+    if (stats.buffer === undefined) stats.buffer = uploaded - downloaded;
+    const requiredRaw = polishTrackerApiValue(account, ['required_ratio', 'requiredRatio', 'minimum_ratio', 'minimumRatio', 'min_ratio', 'minRatio']);
+    if (requiredRaw !== undefined) {
+      const required = parseRatio(String(requiredRaw));
+      if (required && !required.infinite) stats.required_ratio = required.value;
+    }
+    const bonusRaw = polishTrackerApiValue(account, ['bonus_points', 'bonusPoints', 'bonus', 'points', 'karma']) ??
+      (identity ? polishTrackerApiValue(identity, ['bonus_points', 'bonusPoints', 'bonus', 'points', 'karma']) : undefined);
+    if (bonusRaw !== undefined && Number.isFinite(Number(bonusRaw))) stats.bonus_points = Number(bonusRaw);
+    const classRaw = polishTrackerApiValue(account, ['user_class', 'userClass', 'class', 'rank', 'role']) ??
+      (identity ? polishTrackerApiValue(identity, ['user_class', 'userClass', 'class', 'rank', 'role']) : undefined);
+    if (classRaw !== undefined) stats.user_class = String(classRaw).trim();
+
+    return {
+      kind: 'profile',
+      userId: String((identity && polishTrackerApiValue(identity, ['id', 'user_id', 'userId', 'uuid'])) || polishTrackerApiValue(account, ['id', 'user_id', 'userId', 'uuid']) || ''),
+      username: String((identity && polishTrackerApiValue(identity, ['username', 'user_name', 'userName', 'login'])) || polishTrackerApiValue(account, ['name']) || ''),
+      profileUrl: (identity && polishTrackerApiValue(identity, ['profile_url', 'profileUrl'])) || polishTrackerApiValue(account, ['profile_url', 'profileUrl']) || null,
+      stats,
+    };
+  }
+
+  async function readPolishTrackerApi(tracker, apiKey) {
+    const key = String(apiKey || '').trim();
+    if (!key) throw new ReadError('PolishTracker background sync needs an API key. Open Edit PT, enter the key from PolishTracker Settings → API, then press Read again and Save.');
+    const endpoints = ['https://api.pte.nu/api/v3/users/me', 'https://api.pte.nu/users/myprofile'];
+    const errors = [];
+    for (const endpoint of endpoints) {
+      try {
+        const response = await managerFetchText(endpoint, 'application/json', { 'API-Key': key });
+        let payload;
+        try { payload = JSON.parse(response.text); }
+        catch (e) { throw new ReadError('PolishTracker account API returned invalid JSON.'); }
+        const data = mapPolishTrackerApiPayload(payload, !!tracker.si);
+        if (data) return data;
+        errors.push('No Uploaded/Downloaded totals in ' + new URL(endpoint).pathname + '.');
+      } catch (e) {
+        const message = e && e.message ? e.message : 'API request failed.';
+        if (/HTTP 401|HTTP 403/i.test(message)) throw new ReadError('PolishTracker rejected the API key. Check Settings → API and replace the saved key.');
+        errors.push(message);
+      }
+    }
+    throw new ReadError('PolishTracker account API could not provide Uploaded and Downloaded totals. ' + errors.join(' '));
+  }
+
   function parsePolishTrackerStats(doc, si) {
     if (!doc || typeof doc.querySelector !== 'function') return null;
     const root = doc.querySelector('#root') || doc.body || doc;
@@ -3546,56 +3646,22 @@
 
   async function readPolishTracker(tracker, context) {
     context = context || {};
-    const origin = context.origin || location.origin;
-    const request = context.request || fetchText;
     const sourceDocument = Object.prototype.hasOwnProperty.call(context, 'document') ? context.document : document;
-    const pageUrl = context.pageUrl || (sourceDocument ? location.href : origin + '/');
     const si = !!tracker.si;
-
     if (sourceDocument) {
       const stats = parsePolishTrackerStats(sourceDocument, si);
       if (stats) {
-        let profileUrl = tracker.profileUrl || null;
-        if (!profileUrl && pageUrl && new URL(pageUrl).pathname !== '/') profileUrl = pageUrl;
-        let identity = { userId: tracker.userId || null, username: tracker.username || '' };
-        if (profileUrl) {
-          try { identity = Object.assign(identity, identityFromProfile(profileUrl, '')); } catch (e) { /* optional */ }
-        }
         return {
           kind: 'profile',
-          userId: identity.userId || tracker.userId || null,
-          username: identity.username || tracker.username || '',
-          profileUrl,
-          stats,
-        };
-      }
-    }
-
-    // The supplied HTML is a React application shell; server HTML has no account
-    // data unless the React page has rendered it in the current browser document.
-    const target = tracker.profileUrl || pageUrl || (origin + '/');
-    try {
-      const response = await request(target, 'text/html');
-      const doc = new DOMParser().parseFromString(response.text, 'text/html');
-      const stats = parsePolishTrackerStats(doc, si);
-      if (stats) {
-        return {
-          kind: 'profile',
-          userId: tracker.userId || null,
+          userId: tracker.userId || '',
           username: tracker.username || '',
-          profileUrl: tracker.profileUrl || response.url || target,
+          profileUrl: tracker.profileUrl || (context.pageUrl && new URL(context.pageUrl).pathname !== '/' ? context.pageUrl : null),
           stats,
         };
       }
-    } catch (e) {
-      if (!(e instanceof ReadError)) throw e;
-      throw new ReadError('PolishTracker could not load its profile HTML: ' + e.message);
     }
-
-    throw new ReadError(
-      'PolishTracker is a React application. Its HTML shell contains no account stats; ' +
-      'the signed-in page must render Uploaded and Downloaded inside the app before Sherlock can read them.'
-    );
+    const apiKey = tracker.apiKey || GM_getValue('sherlock.polishtracker.apiKey', '');
+    return readPolishTrackerApi(tracker, apiKey);
   }
 
   async function readTracker(tracker, context) {
@@ -3661,7 +3727,7 @@
     throw lastError || new ReadError('Could not read this tracker.');
   }
 
-  function managerFetchText(url, accept) {
+  function managerFetchText(url, accept, extraHeaders) {
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest !== 'function') return reject(new ReadError('Userscript manager requests are unavailable.'));
       let requestUrl;
@@ -3670,7 +3736,7 @@
       GM_xmlhttpRequest({
         method: 'GET',
         url: requestUrl.href,
-        headers: { Accept: accept || '*/*' },
+        headers: Object.assign({ Accept: accept || '*/*' }, extraHeaders || {}),
         responseType: 'text',
         timeout: 25000,
         anonymous: false,
@@ -3910,6 +3976,8 @@
     };
     if (!tracker.shortName) tracker.shortName = shortNameOf(tracker.name);
 
+    const isPolishTrackerForm = isPolishTrackerHost(tracker.host) ||
+      (trackerDirectoryEntry(tracker.name) || {}).name === 'PolishTracker';
     const state = { stats: Object.assign({}, tracker.stats), userId: tracker.userId, username: tracker.username, kind: tracker.kind, readOk: !!existing, logo: tracker.logo };
     const refs = {};
     let busy = false;
@@ -3941,7 +4009,12 @@
     };
 
     const reread = async () => {
-      const t = Object.assign({}, tracker, { si: refs.si.checked, kind: refs.profileUrl.value.trim() ? 'profile' : tracker.kind, profileUrl: refs.profileUrl.value.trim() || null });
+      const t = Object.assign({}, tracker, {
+        si: refs.si.checked,
+        kind: refs.profileUrl.value.trim() ? 'profile' : tracker.kind,
+        profileUrl: refs.profileUrl.value.trim() || null,
+        apiKey: refs.apiKey ? refs.apiKey.value.trim() : GM_getValue('sherlock.polishtracker.apiKey', ''),
+      });
       showNote('Reading your stats from ' + t.host + '…', '');
       try {
         fill(await readTracker(t));
@@ -4016,6 +4089,9 @@
         });
         busy = true; submit.disabled = true; submit.textContent = 'Sending…';
         try {
+          if (isPolishTrackerForm && refs.apiKey && refs.apiKey.value.trim()) {
+            GM_setValue('sherlock.polishtracker.apiKey', refs.apiKey.value.trim());
+          }
           await push(next, { stats });
           next.enabled = !!refs.auto.checked;
           saveTracker(next);
@@ -4043,10 +4119,17 @@
         h('div', { class: 'grid' }, input('username', 'Your username', 'text', tracker.username, { maxlength: 64 }),
           h('label', {}, 'Address', h('input', { value: tracker.origin, readonly: true, disabled: true }))),
         input('profileUrl', 'Profile page address (optional)', 'url', tracker.profileUrl || '', { placeholder: tracker.origin + '/users/yourname' }),
+        isPolishTrackerForm
+          ? input('apiKey', 'PolishTracker API key (required for automatic dashboard updates)', 'password',
+              GM_getValue('sherlock.polishtracker.apiKey', ''),
+              { autocomplete: 'new-password', placeholder: 'Paste your key from Settings → API' })
+          : null,
         h('div', { class: 'grid' }, fieldInputs),
         h('label', { class: 'check' }, (refs.si = h('input', { type: 'checkbox', checked: tracker.si, onchange: updatePreview })), 'This tracker counts GB and TB as 1000, not 1024'),
         h('label', { class: 'check' }, (refs.auto = h('input', { type: 'checkbox', checked: tracker.enabled !== false })), 'Automatically update while the Sherlock dashboard is open or when I visit this tracker'),
-        h('div', { class: 'muted' }, 'Saved only in this browser profile. The tracker appears on your Sherlock dashboard in this browser and auto-updates while that dashboard tab is open. No Sherlock API or token is used.'));
+        h('div', { class: 'muted' }, isPolishTrackerForm
+          ? 'PolishTracker API key is stored only in this browser profile and is sent only to api.pte.nu for account statistics. Other trackers do not use this key.'
+          : 'Saved only in this browser profile. The tracker appears on your Sherlock dashboard in this browser and auto-updates while that dashboard tab is open. No Sherlock API or token is used.'));
       const preview = h('aside', { class: 'tracker-preview' }, logoBox, previewName,
         h('div', { class: 'preview-stat' }, h('small', {}, 'Uploaded data'), previewUploaded));
       const body = h('div', { class: 'body' }, h('div', { class: 'panel-layout' }, preview, fields));
@@ -4718,7 +4801,14 @@
     if (isPolishTrackerHost(PAGE_HOST) || isPolishTrackerDocument(document)) {
       if (document.querySelector('input[type="password"]') ||
           /\/(?:login|signin|auth)(?:\/|$)/i.test(location.pathname)) return false;
-      return !!parsePolishTrackerStats(document, false);
+      const versionKey = 'sherlock.polishtracker.autodetect.version.' + PAGE_HOST;
+      if (GM_getValue(versionKey, '') !== VERSION) {
+        GM_setValue(versionKey, VERSION);
+        GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.failures.' + PAGE_HOST, 0);
+        GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
+      }
+      return !!GM_getValue('sherlock.polishtracker.apiKey', '') || !!parsePolishTrackerStats(document, false);
     }
 
     const isAnimeBytesHost = HOST === 'animebytes.tv' || HOST.endsWith('.animebytes.tv');
@@ -4945,12 +5035,65 @@
     return changed;
   }
 
+  let polishTrackerObserver = null;
+  let polishTrackerObserverTimer = null;
+
+  function startPolishTrackerAutoDetectObserver() {
+    if (!isPolishTrackerHost(PAGE_HOST) && !isPolishTrackerDocument(document)) return;
+    if (polishTrackerObserver || typeof MutationObserver !== 'function' || !document.documentElement) return;
+    polishTrackerObserver = new MutationObserver(() => {
+      if (store.trackers[HOST] || store.dismissed[HOST]) {
+        polishTrackerObserver.disconnect();
+        polishTrackerObserver = null;
+        if (polishTrackerObserverTimer) clearTimeout(polishTrackerObserverTimer);
+        return;
+      }
+      if (polishTrackerObserverTimer) clearTimeout(polishTrackerObserverTimer);
+      polishTrackerObserverTimer = setTimeout(() => {
+        polishTrackerObserverTimer = null;
+        if (looksLikeTracker()) {
+          polishTrackerObserver.disconnect();
+          polishTrackerObserver = null;
+          autoAddTracker();
+        }
+      }, 350);
+    });
+    polishTrackerObserver.observe(document.documentElement, { childList: true, subtree: true });
+    window.setTimeout(() => {
+      if (polishTrackerObserver) { polishTrackerObserver.disconnect(); polishTrackerObserver = null; }
+      if (polishTrackerObserverTimer) { clearTimeout(polishTrackerObserverTimer); polishTrackerObserverTimer = null; }
+    }, 30000);
+  }
+
+  function migratePolishTrackerReactShellError() {
+    const key = 'sherlock.polishtracker.react-shell-migration';
+    if (GM_getValue(key, '') === VERSION) return false;
+    const all = store.trackers;
+    let changed = false;
+    Object.values(all).forEach((tracker) => {
+      if (!tracker) return;
+      const identity = trackerDirectoryEntry(tracker.name || tracker.fullName);
+      const host = trackerHostname(tracker.host || tracker.origin);
+      const isPte = host === 'pte.nu' || host.endsWith('.pte.nu') ||
+        !!(identity && identity.name === 'PolishTracker') ||
+        String(tracker.shortName || '').toUpperCase() === 'PT';
+      if (!isPte || !/PolishTracker is a React application|HTML shell contains no account stats/i.test(String(tracker.lastError || ''))) return;
+      tracker.lastError = null;
+      tracker.lastAttempt = 0;
+      tracker.lastOutcome = 'retry-queued';
+      changed = true;
+    });
+    if (changed) store.trackers = all;
+    GM_setValue(key, VERSION);
+    return changed;
+  }
+
   function main() {
     registerMenus();
     const isDashboard = isSherlockDashboardPage();
     if (isDashboard) {
-      // Requeue the old generic Gazelle error once so this version immediately tests the PTP reader.
       migrateLegacyPtpGazelleError();
+      migratePolishTrackerReactShellError();
       // The dashboard's own origin is the destination; no API calls are made to it.
       // Keep links pinned to the canonical public dashboard, not the VPS origin alias.
       store.url = DEFAULT_URL;
@@ -4974,6 +5117,7 @@
     }
     if (store.dismissed[HOST] || sessionSkipped.has(HOST)) return;
     if (looksLikeTracker()) autoAddTracker();
+    startPolishTrackerAutoDetectObserver();
   }
 
   main();
