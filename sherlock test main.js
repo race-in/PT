@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.7.4
+// @version      1.7.5
 // @description  Automatically discovers and syncs unsupported trackers locally in this browser; no Sherlock API or token required.
 // @author       Sherlock
 // @match        http://*/*
@@ -2037,7 +2037,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.7.4';
+  const VERSION = '1.7.5';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -4408,6 +4408,30 @@
       }
       return true;
     }
+    const isAnimeBytesHost = HOST === 'animebytes.tv' || HOST.endsWith('.animebytes.tv');
+    if (isAnimeBytesHost) {
+      const loginPath = /\/(?:login|signin)(?:\.php|\/|$)/i.test(location.pathname);
+      const profileLink = findProfileLink(document, location.href, location.origin);
+      const statsBar = document.querySelector('#userinfo_stats, #userinfo, #userinfo_username');
+      const statsText = String((statsBar && statsBar.textContent) || '');
+      const pageText = String((document.body && document.body.innerText) || '').slice(0, 6000);
+      const hasVisibleAccountStats =
+        (/\b(upload(?:ed)?|up)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(statsText) &&
+         /\b(download(?:ed)?|down)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(statsText)) ||
+        (/\b(upload(?:ed)?|up)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(pageText) &&
+         /\b(download(?:ed)?|down)\b\s*[:：]?\s*\d[\d.,]*\s*[KMGTP]i?B/i.test(pageText));
+      const authenticatedPage = !loginPath && (!!profileLink || hasVisibleAccountStats);
+      if (authenticatedPage) {
+        const versionKey = 'sherlock.animebytes.autodetect.version.' + PAGE_HOST;
+        if (GM_getValue(versionKey, '') !== VERSION) {
+          GM_setValue(versionKey, VERSION);
+          GM_setValue('sherlock.autoadd.attempt.' + PAGE_HOST, 0);
+          GM_setValue('sherlock.autoadd.lock.' + PAGE_HOST, 0);
+        }
+      }
+      return authenticatedPage;
+    }
+
     const detectedApiType = trackerApiType({ host: HOST, origin: location.origin });
     if (detectedApiType === 'unit3d') {
       const versionKey = 'sherlock.cinematik.autodetect.version.' + PAGE_HOST;
