@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.8
+// @version      1.10.9
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/5.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.8';
+  const VERSION = '1.10.9';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5476,11 +5476,17 @@
       summarySection.style.display='grid';
       summarySection.style.gridTemplateColumns='repeat(5,minmax(0,1fr))';
       summarySection.style.gridAutoRows='minmax(96px,auto)';
+      summarySection.style.gridAutoFlow='row';
       summarySection.style.width='100%';
-      ordered.forEach((item) => {
+
+      // Pin the summary cards to row one in a deterministic left-to-right order.
+      // Buffer, last 24 hours is the fifth (far-right) box.
+      ordered.forEach((item, index) => {
         item.classList.add('h-full','min-w-0');
         item.style.width='100%';
         item.style.minWidth='0';
+        item.style.gridRow='1';
+        item.style.gridColumn=String(index + 1);
       });
     }
 
