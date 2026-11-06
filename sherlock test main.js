@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.10.4
+// @version      1.10.5
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/main/sherlock-test-main.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/sherlock%20test%20main.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.10.4';
+  const VERSION = '1.10.5';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -6359,12 +6359,40 @@
     return changed;
   }
 
+  function migrateMTeamReaderRoutingError() {
+    const key = 'sherlock.mteam.reader-routing-migration';
+    if (GM_getValue(key, '') === VERSION) return false;
+    const all = store.trackers;
+    let changed = false;
+
+    Object.values(all).forEach((tracker) => {
+      if (!tracker) return;
+      const isMTeam = trackerApiType(tracker) === 'mteam' ||
+        String(tracker.kind || '').toLowerCase() === 'mteam' ||
+        normalizeTrackerDirectoryName(tracker.name || tracker.fullName) === 'mteam' ||
+        String(tracker.shortName || '').trim().toUpperCase() === 'M-TEAM';
+      if (!isMTeam) return;
+
+      // Old v1.9.x could misroute some saved M-Team records to the generic
+      // profile reader. Clear that stale error and retry immediately once on upgrade.
+      tracker.lastError = null;
+      tracker.lastAttempt = 0;
+      tracker.lastOutcome = 'retry-queued';
+      changed = true;
+    });
+
+    if (changed) store.trackers = all;
+    GM_setValue(key, VERSION);
+    return changed;
+  }
+
   function main() {
     registerMenus();
     const isDashboard = isSherlockDashboardPage();
     if (isDashboard) {
       migrateLegacyPtpGazelleError();
       migratePolishTrackerReactShellError();
+      migrateMTeamReaderRoutingError();
       // The dashboard's own origin is the destination; no API calls are made to it.
       // Keep links pinned to the canonical public dashboard, not the VPS origin alias.
       store.url = DEFAULT_URL;
