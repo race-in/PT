@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.11.1
+// @version      1.11.2
 // @updateURL    https://raw.githubusercontent.com/race-in/PT/stable/5.meta.js
 // @downloadURL  https://raw.githubusercontent.com/race-in/PT/stable/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.11.1';
+  const VERSION = '1.11.2';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5558,6 +5558,20 @@
 
     const uploaded24Value = uploaded24Card && uploaded24Card.querySelector('.num');
     const buffer24Value = card && card.querySelector('.num');
+
+    // The pre-existing Buffer-24h card can be reused from an older native DOM
+    // with a muted .num class. Match its value typography to the normal
+    // Total Uploaded summary value, while keeping its own text/data/tooltips.
+    const totalUploadedCard = summarySection && Array.from(summarySection.children).find((candidate) => {
+      const label = candidate.querySelector('.eyebrow');
+      return String(label && label.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase() === 'total uploaded';
+    });
+    const valueStyleReference = (totalUploadedCard && totalUploadedCard.querySelector('.num')) ||
+      uploaded24Value;
+    if (buffer24Value && valueStyleReference && buffer24Value !== valueStyleReference) {
+      buffer24Value.className = valueStyleReference.className;
+      buffer24Value.style.cssText = valueStyleReference.style.cssText;
+    }
 
     const customTraffic = sumTrackerTraffic24h(customTrackers);
     const nativeTraffic = sumTrackerTraffic24h(nativeTrackers);
