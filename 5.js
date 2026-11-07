@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
-// @version      1.11.2
-// @updateURL    https://raw.githubusercontent.com/race-in/PT/stable/5.meta.js
-// @downloadURL  https://raw.githubusercontent.com/race-in/PT/stable/5.js
+// @version      1.11.3-test.1
+// @updateURL    https://raw.githubusercontent.com/race-in/PT/test/downloaded-last-24h/5.meta.js
+// @downloadURL  https://raw.githubusercontent.com/race-in/PT/test/downloaded-last-24h/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
 // @author       Sherlock
 // @match        http://*/*
@@ -2606,7 +2606,7 @@
    * Settings, kept in the userscript manager
    * ==================================================================== */
 
-  const VERSION = '1.11.2';
+  const VERSION = '1.11.3-test.1';
   const DEFAULT_URL = SHERLOCK_DASHBOARD_BASE_URL;
   function normalizeIptorrentsTrackerStore(all) {
     const entries = Object.entries(all || {}).filter(([key, tracker]) =>
@@ -5399,7 +5399,7 @@
     return bufferBasis;
   }
 
-  function updateDashboard24hBuffer(customTrackers, nativeTrackers) {
+  function updateDashboard24hMetrics(customTrackers, nativeTrackers) {
     const main = document.querySelector('main') || document.querySelector('#main') || document.body;
     const bufferLabelPattern = /^total buffer(?: at required ratio)?$/;
     const summarySection = Array.from(main.querySelectorAll('section')).find((section) => {
@@ -5421,20 +5421,16 @@
       !(candidate.matches && candidate.matches('a[href^="/trackers/"]'))
     );
     const cards = Array.from(new Set(preferredCards.concat(otherCards)));
-    let card = preferredCards.find((candidate) => {
-      const label = candidate.querySelector('.eyebrow');
-      return /^buffer,?\s*(?:last\s*)?24\s*(?:h\b|hours?\b)$/i.test(
+    const is24hTrafficCard = (candidate) => {
+      const label = candidate && candidate.querySelector('.eyebrow');
+      return /^(?:buffer|downloaded),?\s*(?:last\s*)?24\s*(?:h\b|hours?\b)$/i.test(
         String(label && label.textContent || '').replace(/\s+/g, ' ').trim()
       );
-    }) || otherCards.find((candidate) => {
-      const label = candidate.querySelector('.eyebrow');
-      return /^buffer,?\s*(?:last\s*)?24\s*(?:h\b|hours?\b)$/i.test(
-        String(label && label.textContent || '').replace(/\s+/g, ' ').trim()
-      );
-    });
+    };
+    let card = preferredCards.find(is24hTrafficCard) || otherCards.find(is24hTrafficCard);
     // Keep five equal, aligned summary boxes:
     // Total Buffer | Total Uploaded | Total Downloaded |
-    // Uploaded, last 24 hours | Buffer, last 24 hours.
+    // Uploaded, last 24 hours | Downloaded, last 24 hours.
     let uploaded24Card = null;
     if (summarySection) {
       if (card && card.parentNode !== summarySection) summarySection.appendChild(card);
@@ -5482,47 +5478,50 @@
       }
       delete uploaded24Card.dataset.sherlockTotalDownloaded;
 
-      // Always provide a real Buffer-24h card with the same DOM as the other
-      // summary metrics. Previously the value update depended on finding a
-      // pre-existing native Buffer-24h node, while Uploaded-24h was cloned.
-      let buffer24Card = Array.from(summarySection.children).find((candidate) =>
+      // Reuse the prior Buffer-24h card during upgrade, then make it the
+      // Downloaded-24h card. This prevents a stale fifth box or duplicate card.
+      let downloaded24Card = Array.from(summarySection.children).find((candidate) =>
+        candidate.dataset && candidate.dataset.sherlock24hDownloadedCard === 'true'
+      ) || Array.from(summarySection.children).find((candidate) =>
+        summaryLabel(candidate) === 'downloaded, last 24 hours'
+      ) || Array.from(summarySection.children).find((candidate) =>
         candidate.dataset && candidate.dataset.sherlock24hBufferCard === 'true'
       ) || Array.from(summarySection.children).find((candidate) =>
         summaryLabel(candidate) === 'buffer, last 24 hours'
       ) || card;
 
-      if (buffer24Card &&
-          (!buffer24Card.querySelector('.eyebrow') || !buffer24Card.querySelector('.num'))) {
-        buffer24Card.remove();
-        buffer24Card = null;
+      if (downloaded24Card &&
+          (!downloaded24Card.querySelector('.eyebrow') || !downloaded24Card.querySelector('.num'))) {
+        downloaded24Card.remove();
+        downloaded24Card = null;
       }
-      if (!buffer24Card) {
+      if (!downloaded24Card) {
         const totalUploadedCard = Array.from(summarySection.children).find((candidate) =>
           summaryLabel(candidate) === 'total uploaded'
         );
         if (!totalUploadedCard) return null;
-        buffer24Card = totalUploadedCard.cloneNode(true);
-        buffer24Card.dataset.sherlock24hBufferCard = 'true';
-        buffer24Card.removeAttribute('id');
-        buffer24Card.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
+        downloaded24Card = totalUploadedCard.cloneNode(true);
+        downloaded24Card.removeAttribute('id');
+        downloaded24Card.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
       }
 
-      buffer24Card.dataset.sherlock24hBufferCard = 'true';
-      const bufferLabel = buffer24Card.querySelector('.eyebrow');
-      const bufferValue = buffer24Card.querySelector('.num');
-      if (bufferLabel) bufferLabel.textContent = 'Buffer, last 24 hours';
-      if (bufferValue) {
-        bufferValue.textContent = 'Collecting';
-        bufferValue.removeAttribute('title');
-        bufferValue.removeAttribute('aria-label');
-        delete bufferValue.dataset.sherlockNativeBytes;
-        delete bufferValue.dataset.sherlockLastOutputTitle;
-        delete bufferValue.dataset.sherlock24hCoverage;
-        delete bufferValue.dataset.sherlock24hUploaded;
-        delete bufferValue.dataset.sherlock24hDownloaded;
+      downloaded24Card.dataset.sherlock24hDownloadedCard = 'true';
+      delete downloaded24Card.dataset.sherlock24hBufferCard;
+      const downloadedLabel = downloaded24Card.querySelector('.eyebrow');
+      const downloadedValue = downloaded24Card.querySelector('.num');
+      if (downloadedLabel) downloadedLabel.textContent = 'Downloaded, last 24 hours';
+      if (downloadedValue) {
+        downloadedValue.textContent = 'Collecting';
+        downloadedValue.removeAttribute('title');
+        downloadedValue.removeAttribute('aria-label');
+        delete downloadedValue.dataset.sherlockNativeBytes;
+        delete downloadedValue.dataset.sherlockLastOutputTitle;
+        delete downloadedValue.dataset.sherlock24hCoverage;
+        delete downloadedValue.dataset.sherlock24hUploaded;
+        delete downloadedValue.dataset.sherlock24hDownloaded;
       }
-      delete buffer24Card.dataset.sherlockTotalDownloaded;
-      card = buffer24Card;
+      delete downloaded24Card.dataset.sherlockTotalDownloaded;
+      card = downloaded24Card;
 
       // Deterministic order: five equal cards, side by side on desktop.
       const ordered = [
@@ -5533,7 +5532,7 @@
         Array.from(summarySection.children).find((item) =>
           summaryLabel(item) === 'total downloaded'),
         uploaded24Card,
-        card,
+        downloaded24Card,
       ].filter(Boolean);
       ordered.forEach((item) => summarySection.appendChild(item));
 
@@ -5546,7 +5545,7 @@
       summarySection.style.width='100%';
 
       // Pin the summary cards to row one in a deterministic left-to-right order.
-      // Buffer, last 24 hours is the fifth (far-right) box.
+      // Downloaded, last 24 hours is the fifth (far-right) box.
       ordered.forEach((item, index) => {
         item.classList.add('h-full','min-w-0');
         item.style.width='100%';
@@ -5557,20 +5556,19 @@
     }
 
     const uploaded24Value = uploaded24Card && uploaded24Card.querySelector('.num');
-    const buffer24Value = card && card.querySelector('.num');
+    const downloaded24Value = downloaded24Card && downloaded24Card.querySelector('.num');
 
-    // The pre-existing Buffer-24h card can be reused from an older native DOM
-    // with a muted .num class. Match its value typography to the normal
-    // Total Uploaded summary value, while keeping its own text/data/tooltips.
+    // Match the Downloaded-24h value typography to the normal Total Uploaded
+    // summary value, while keeping its own text/data/tooltips.
     const totalUploadedCard = summarySection && Array.from(summarySection.children).find((candidate) => {
       const label = candidate.querySelector('.eyebrow');
       return String(label && label.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase() === 'total uploaded';
     });
     const valueStyleReference = (totalUploadedCard && totalUploadedCard.querySelector('.num')) ||
       uploaded24Value;
-    if (buffer24Value && valueStyleReference && buffer24Value !== valueStyleReference) {
-      buffer24Value.className = valueStyleReference.className;
-      buffer24Value.style.cssText = valueStyleReference.style.cssText;
+    if (downloaded24Value && valueStyleReference && downloaded24Value !== valueStyleReference) {
+      downloaded24Value.className = valueStyleReference.className;
+      downloaded24Value.style.cssText = valueStyleReference.style.cssText;
     }
 
     const customTraffic = sumTrackerTraffic24h(customTrackers);
@@ -5603,10 +5601,10 @@
 
     if (!totalTrackers || !readyTrackers) {
       const message = 'Collecting 24-hour upload/download history: no tracker has a usable observation window yet.';
-      if (buffer24Value) {
-        buffer24Value.textContent = 'Collecting';
-        buffer24Value.dataset.sherlock24hCoverage = coverage;
-        buffer24Value.title = message;
+      if (downloaded24Value) {
+        downloaded24Value.textContent = 'Collecting';
+        downloaded24Value.dataset.sherlock24hCoverage = coverage;
+        downloaded24Value.title = message;
       }
       if (uploaded24Value) {
         uploaded24Value.textContent = 'Collecting';
@@ -5619,7 +5617,7 @@
     const uploaded = customTraffic.uploaded + nativeTraffic.uploaded;
     const downloaded = customTraffic.downloaded + nativeTraffic.downloaded;
     const buffer = customTraffic.buffer + nativeTraffic.buffer;
-    if (buffer24Value) writeDashboardMetric(card, buffer);
+    if (downloaded24Value) writeDashboardMetric(downloaded24Card, downloaded);
     if (uploaded24Value) writeDashboardMetric(uploaded24Card, uploaded);
 
     const uploaded24Node = uploaded24Card && uploaded24Card.querySelector('.num');
@@ -5633,19 +5631,15 @@
       uploaded24Node.title = '24h Uploaded: ' + localBytes(uploaded) + ' · ' + coverageMessage;
     }
 
-    const valueNode = buffer24Value;
-    if (valueNode) {
-      valueNode.dataset.sherlock24hUploaded = String(Math.round(uploaded));
-      valueNode.dataset.sherlock24hDownloaded = String(Math.round(downloaded));
-      valueNode.dataset.sherlock24hCoverage = coverage;
-      valueNode.textContent = (partial ? '≈ ' : '') + signedBytes(buffer);
-      valueNode.setAttribute('aria-label',
-        (partial ? 'Partial ' : '') + '24-hour buffer: ' + localBytes(uploaded) +
-        ' uploaded minus ' + localBytes(downloaded) + ' downloaded across ' +
-        readyTrackers + '/' + totalTrackers + ' trackers');
-      valueNode.title = '24h Upload: ' + localBytes(uploaded) +
-        ' · 24h Download: ' + localBytes(downloaded) +
-        ' · Net Buffer: ' + signedBytes(buffer) +
+    const downloaded24Node = downloaded24Card && downloaded24Card.querySelector('.num');
+    if (downloaded24Node) {
+      downloaded24Node.dataset.sherlock24hDownloaded = String(Math.round(downloaded));
+      downloaded24Node.dataset.sherlock24hCoverage = coverage;
+      downloaded24Node.textContent = (partial ? '≈ ' : '') + localBytes(downloaded);
+      downloaded24Node.setAttribute('aria-label',
+        (partial ? 'Partial ' : '') + 'Downloaded in the last 24 hours: ' +
+        localBytes(downloaded) + ' across ' + readyTrackers + '/' + totalTrackers + ' trackers');
+      downloaded24Node.title = '24h Downloaded: ' + localBytes(downloaded) +
         ' · ' + coverageMessage;
     }
     return { uploaded, downloaded, buffer, ready: readyTrackers, total: totalTrackers, complete: true };
@@ -5956,7 +5950,7 @@
     setMetricNodeBytes(totalValue, total);
 
     const nativeTrackers = nativeTrackerHistoryRecords(rows);
-    updateDashboard24hBuffer(customTrackers, nativeTrackers);
+    updateDashboard24hMetrics(customTrackers, nativeTrackers);
   }
 
 
