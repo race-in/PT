@@ -2,8 +2,8 @@
 // @name         Sherlock Tracker Sync
 // @namespace    __SHERLOCK_URL__
 // @version      1.11.1
-// @updateURL    https://raw.githubusercontent.com/race-in/PT/main/5.meta.js
-// @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
+// @updateURL    https://raw.githubusercontent.com/race-in/PT/stable/5.meta.js
+// @downloadURL  https://raw.githubusercontent.com/race-in/PT/stable/5.js
 // @description  Automatically discovers unsupported trackers and refreshes their dashboard statistics in this browser.
 // @author       Sherlock
 // @match        http://*/*
