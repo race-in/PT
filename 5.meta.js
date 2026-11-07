@@ -3,5 +3,5 @@
 // @namespace    __SHERLOCK_URL__
 // @version      1.11.1
 // @description  Automatically discovers trackers and refreshes dashboard statistics in this browser.
-// @downloadURL  https://raw.githubusercontent.com/race-in/PT/main/5.js
+// @downloadURL  https://raw.githubusercontent.com/race-in/PT/stable/5.js
 // ==/UserScript==
